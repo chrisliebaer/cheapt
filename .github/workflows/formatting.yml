@@ -1,0 +1,22 @@
+name: Code Formatting
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  rustfmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - run: |
+          rustup install --profile minimal nightly
+          rustup override set nightly
+          rustup component add rustfmt
+      - run: cargo fmt --all -- --check

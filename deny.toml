@@ -1,0 +1,34 @@
+# cargo-deny is really only ever intended to run on the "normal" tier-1 targets
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-unknown-linux-gnu" },
+    { triple = "x86_64-unknown-linux-musl" },
+    { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-apple-darwin" },
+    { triple = "x86_64-pc-windows-msvc" },
+]
+
+[advisories]
+vulnerability = "deny"
+unmaintained = "warn"
+notice = "warn"
+unsound = "deny"
+yanked = "deny"
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[licenses]
+default = "deny"
+unlicensed = "deny"
+copyleft = "deny"
+confidence-threshold = 0.93
+allow-osi-fsf-free = "both"
+
+exceptions = [
+]
