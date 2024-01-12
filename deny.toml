@@ -41,5 +41,7 @@ allow = [
 
 exceptions = [
 		{ allow = ["Unicode-DFS-2016"], name = "unicode-ident" },
-		{ name = "ring" },
+
+		# ring is using multiple intermangled licenses
+		{ allow = ["NOASSERTION"], name = "ring" },
 ]
