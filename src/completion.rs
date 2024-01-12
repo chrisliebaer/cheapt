@@ -13,11 +13,12 @@ use miette::{
 };
 use poise::serenity_prelude::{
 	ChannelId,
+	CreateMessage,
 	Message,
 };
 use tracing::{
-	debug,
 	info,
+	trace,
 };
 
 use crate::{
@@ -36,7 +37,7 @@ struct GuildContext {
 impl From<&poise::serenity_prelude::PartialGuild> for GuildContext {
 	fn from(guild: &poise::serenity_prelude::PartialGuild) -> Self {
 		Self {
-			id: guild.id.0,
+			id: guild.id.into(),
 			name: guild.name.clone(),
 			members: guild.approximate_member_count,
 		}
@@ -53,7 +54,7 @@ struct ChannelContext {
 impl From<&poise::serenity_prelude::GuildChannel> for ChannelContext {
 	fn from(channel: &poise::serenity_prelude::GuildChannel) -> Self {
 		Self {
-			id: channel.id.0,
+			id: channel.id.into(),
 			name: channel.name.clone(),
 			topic: channel.topic.clone(),
 		}
@@ -69,7 +70,7 @@ struct UserContext {
 impl From<&poise::serenity_prelude::User> for UserContext {
 	fn from(user: &poise::serenity_prelude::User) -> Self {
 		Self {
-			id: user.id.0,
+			id: user.id.into(),
 			name: user.name.clone(),
 		}
 	}
@@ -119,13 +120,14 @@ async fn create_tera_context<'a>(ctx: &'a poise::serenity_prelude::Context, mess
 				.wrap_err("failed to fetch guild")?;
 
 			// if we are in guild, we will use whatever name we have in the guild
+			let id = ctx.cache.current_user().id;
 			let self_member = guild
-				.member(ctx, ctx.cache.current_user_id())
+				.member(ctx, id)
 				.await
 				.into_diagnostic()
 				.wrap_err("failed to fetch ourself as guild member")?
 				.nick
-				.unwrap_or_else(|| ctx.cache.current_user().name);
+				.unwrap_or_else(|| ctx.cache.current_user().name.to_string());
 			tera_context.insert("name", &self_member);
 
 			let channel = message
@@ -189,7 +191,7 @@ async fn generate_openai_response<'a>(
 	let chat_history = chat_history.iter().map(|m| m.into()).collect::<Vec<&Message>>();
 
 	// add all messages to invocation builder, so it can remove markup and extract users and emotes
-	let mut invocation_builder = InvocationBuilder::new(ctx.cache.current_user_id(), "you");
+	let mut invocation_builder = InvocationBuilder::new(ctx.cache.current_user().id, "you");
 	for message in chat_history {
 		invocation_builder.add_message(message);
 	}
@@ -218,7 +220,7 @@ async fn generate_openai_response<'a>(
 		.into_diagnostic()
 		.wrap_err("completion request failed")?;
 
-	let choice = response.choices.get(0).ok_or(miette!("Empty choice array received"))?;
+	let choice = response.choices.first().ok_or(miette!("Empty choice array received"))?;
 	info!(finish_reason = ?choice.finish_reason, "OpenAI response: {:?}", choice.message.content);
 
 	if choice.finish_reason == Some(FinishReason::ContentFilter) {
@@ -231,14 +233,11 @@ async fn generate_openai_response<'a>(
 		.as_ref()
 		.ok_or(miette!("OpenAI response has no content"))?;
 
+	let content = invocation_builder.retransform_response(content);
+
 	message
 		.channel_id
-		.send_message(ctx, |m| {
-			m.reference_message(message);
-			m.allowed_mentions(|am| am.empty_parse().replied_user(true));
-			m.content(content);
-			m
-		})
+		.send_message(ctx, CreateMessage::new().reference_message(message).content(content))
 		.await
 		.into_diagnostic()
 		.wrap_err("failed to send reply message")?;
@@ -269,7 +268,7 @@ fn dump_request_messages(messages: &Vec<ChatCompletionRequestMessage>) {
 		lines.push(message);
 	}
 
-	debug!("Sending following context to completion:\n{}", lines.join("\n"));
+	trace!("Sending following context to completion:\n{}", lines.join("\n"));
 }
 
 /// Sends a typing indicator to a specified channel every 5 seconds, while running a separate task to handle messages
@@ -314,5 +313,5 @@ fn dump_extracted_messages(messages: &[ContextMessageVariant]) {
 		lines.push(format!("{}({}): {}", reason, message.author.name, message.content));
 	}
 
-	debug!("Extracted the following messages from discord:\n{}", lines.join("\n"));
+	trace!("Extracted the following messages from discord:\n{}", lines.join("\n"));
 }

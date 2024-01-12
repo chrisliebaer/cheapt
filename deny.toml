@@ -1,11 +1,11 @@
 # cargo-deny is really only ever intended to run on the "normal" tier-1 targets
 targets = [
-    { triple = "x86_64-unknown-linux-gnu" },
-    { triple = "aarch64-unknown-linux-gnu" },
-    { triple = "x86_64-unknown-linux-musl" },
-    { triple = "aarch64-apple-darwin" },
-    { triple = "x86_64-apple-darwin" },
-    { triple = "x86_64-pc-windows-msvc" },
+		{ triple = "x86_64-unknown-linux-gnu" },
+		{ triple = "aarch64-unknown-linux-gnu" },
+		{ triple = "x86_64-unknown-linux-musl" },
+		{ triple = "aarch64-apple-darwin" },
+		{ triple = "x86_64-apple-darwin" },
+		{ triple = "x86_64-pc-windows-msvc" },
 ]
 
 [advisories]
@@ -14,6 +14,11 @@ unmaintained = "warn"
 notice = "warn"
 unsound = "deny"
 yanked = "deny"
+
+ignore = [
+		# we are only consuming a tls endpoint
+		"RUSTSEC-2023-0071"
+]
 
 [bans]
 multiple-versions = "allow"
@@ -31,4 +36,16 @@ confidence-threshold = 0.93
 allow-osi-fsf-free = "both"
 
 exceptions = [
+		{ allow = ["Unicode-DFS-2016"], name = "unicode-ident" },
+		# ring is using multiple intermangled licenses
+		{ allow = ["ISC", "OpenSSL"], name = "ring" },
+		{ allow = ["MPL-2.0"], name = "webpki-roots" }
+]
+
+
+[[licenses.clarify]]
+name = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [
+		{ path = "LICENSE", hash = 0xbd0eed23 }
 ]

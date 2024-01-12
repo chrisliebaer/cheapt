@@ -20,6 +20,8 @@ use regex::Regex;
 lazy_static! {
 	static ref USER_MENTION_REGEX: Regex = Regex::new(r"<@!?(?P<id>\d+)>").unwrap();
 	static ref EMOTE_MENTION_REGEX: Regex = Regex::new(r"<:(?P<name>\w+):(?P<id>\d+)>").unwrap();
+	static ref USER_HANDLE_REGEX: Regex = Regex::new(r"@(?P<handle>\w+)").unwrap();
+	static ref EMOTE_NAME_REGEX: Regex = Regex::new(r":(?P<name>\w+):").unwrap();
 }
 
 /// This struct contains additional user provided context for the current context.
@@ -62,6 +64,7 @@ pub struct InvocationBuilder {
 	emote_cache: HashMap<String, EmojiId>,
 }
 
+// TODO: implement database lookup for emoji and user ids
 impl InvocationBuilder {
 	pub fn new(own_id: UserId, bot_name: &str) -> Self {
 		let mut user_cache = HashMap::new();
@@ -86,10 +89,10 @@ impl InvocationBuilder {
 
 		// extract emotes from message
 		for capture in EMOTE_MENTION_REGEX.captures_iter(&message.content) {
-			if let (Some(name), Some(id)) = (capture.name("name"), capture.name("id")) {
-				let emoji_id = EmojiId(id.as_str().parse().unwrap_or(0));
-				self.emote_cache.insert(name.as_str().to_string(), emoji_id);
-			}
+			let name = capture.name("name").unwrap().as_str().to_string();
+			let id = capture.name("id").unwrap().as_str().parse().unwrap();
+
+			self.emote_cache.insert(name, EmojiId::new(id));
 		}
 
 		// we can't transform the message directly, since other messages might provide additional emotes and users
@@ -210,6 +213,36 @@ impl InvocationBuilder {
 
 		// replace emote mentions with :emote_name:
 		let result = EMOTE_MENTION_REGEX.replace_all(&result, ":$name:");
+
+		result.to_string()
+	}
+
+	/// Transforms a response from the OpenAI API into a Discord message.
+	/// This will replace @handle with user mentions and :emote_name: with emote mentions.
+	pub fn retransform_response(&self, message: &str) -> String {
+		let result = message.to_string();
+
+		let result = USER_HANDLE_REGEX.replace_all(&result, |caps: &regex::Captures| {
+			let handle = caps.name("handle").unwrap().as_str();
+
+			// try to find user id in cache, if not found, use handle with @ prefix
+			self
+				.user_cache
+				.get(handle)
+				.map(|id| format!("<@{}>", id))
+				.unwrap_or(format!("@{}", handle))
+		});
+
+		let result = EMOTE_NAME_REGEX.replace_all(&result, |caps: &regex::Captures| {
+			let name = caps.name("name").unwrap().as_str();
+
+			// try to find emote id in cache, if not found, use :name:
+			self
+				.emote_cache
+				.get(name)
+				.map(|id| format!("<:{}:{}>", name, id))
+				.unwrap_or(format!(":{}:", name))
+		});
 
 		result.to_string()
 	}
