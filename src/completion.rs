@@ -220,7 +220,7 @@ async fn generate_openai_response<'a>(
 		.into_diagnostic()
 		.wrap_err("completion request failed")?;
 
-	let choice = response.choices.get(0).ok_or(miette!("Empty choice array received"))?;
+	let choice = response.choices.first().ok_or(miette!("Empty choice array received"))?;
 	info!(finish_reason = ?choice.finish_reason, "OpenAI response: {:?}", choice.message.content);
 
 	if choice.finish_reason == Some(FinishReason::ContentFilter) {
