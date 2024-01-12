@@ -35,14 +35,17 @@ copyleft = "deny"
 confidence-threshold = 0.93
 allow-osi-fsf-free = "both"
 
-clarify = [
-		{ name = "ring", expression = "NOASSERTION", license-files = [
-				{ path = "LICENSE", hash = 0x9e1f9d9d },
-		] },
-]
-
 exceptions = [
 		{ allow = ["Unicode-DFS-2016"], name = "unicode-ident" },
 		# ring is using multiple intermangled licenses
-		{ allow = ["NOASSERTION"], name = "ring" },
+		{ allow = ["ISC", "OpenSSL"], name = "ring" },
+		{ allow = ["MPL-2.0"], name = "webpki-roots" }
+]
+
+
+[[licenses.clarify]]
+name = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [
+		{ path = "LICENSE", hash = 0xbd0eed23 }
 ]
