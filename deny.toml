@@ -35,13 +35,14 @@ copyleft = "deny"
 confidence-threshold = 0.93
 allow-osi-fsf-free = "both"
 
-allow = [
-		"MPL-2.0",
+clarify = [
+		{ name = "ring", expression = "NOASSERTION", license-files = [
+				{ path = "LICENSE", hash = 0x9e1f9d9d },
+		] },
 ]
 
 exceptions = [
 		{ allow = ["Unicode-DFS-2016"], name = "unicode-ident" },
-
 		# ring is using multiple intermangled licenses
 		{ allow = ["NOASSERTION"], name = "ring" },
 ]
