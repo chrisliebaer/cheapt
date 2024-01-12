@@ -5,6 +5,7 @@ use miette::{
 };
 use poise::serenity_prelude::{
 	Context,
+	GetMessages,
 	Message,
 };
 
@@ -83,7 +84,7 @@ impl InvocationContextSettings {
 				for center in chain_messages {
 					let window = message
 						.channel_id
-						.messages(ctx, |f| f.around(center.id).limit(reply_chain_window as u64))
+						.messages(ctx, GetMessages::new().around(center.id).limit(reply_chain_window as u8))
 						.await
 						.into_diagnostic()
 						.wrap_err("failed to fetch reply chain window")?;
@@ -129,7 +130,7 @@ impl InvocationContextSettings {
 		if let Some(max_channel_history) = self.max_channel_history {
 			let history = message
 				.channel_id
-				.messages(ctx, |f| f.before(message.id).limit(max_channel_history as u64))
+				.messages(ctx, GetMessages::new().before(message.id).limit(max_channel_history as u8))
 				.await
 				.into_diagnostic()
 				.wrap_err("failed to fetch channel history")?;
@@ -274,7 +275,7 @@ impl ContextMessageVariant {
 			ContextMessageVariant::Reply(message) => message.id,
 			ContextMessageVariant::ReplyWindow(message) => message.id,
 		}
-		.0
+		.into()
 	}
 }
 

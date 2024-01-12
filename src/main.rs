@@ -2,8 +2,6 @@ mod completion;
 mod context_extraction;
 mod invocation_builder;
 
-use std::collections::HashMap;
-
 use async_openai::{
 	config::OpenAIConfig,
 	Client,
@@ -18,16 +16,18 @@ use miette::{
 };
 use poise::{
 	serenity_prelude::{
+		ClientBuilder,
 		CreateAllowedMentions,
+		FullEvent,
 		GatewayIntents,
 	},
-	Event,
 	Framework,
 	FrameworkError,
 	FrameworkOptions,
 };
 use tera::Tera;
 use tracing::{
+	debug,
 	error,
 	info,
 	info_span,
@@ -105,18 +105,14 @@ async fn main() -> Result<()> {
 			})
 		},
 		// block all mentions by default
-		allowed_mentions: Some(CreateAllowedMentions(HashMap::new())),
+		allowed_mentions: Some(CreateAllowedMentions::new().empty_roles().empty_users().replied_user(true)),
 		manual_cooldowns: true,
 		skip_checks_for_owners: false,
 		event_handler: |ctx, ev, _framework, app| Box::pin(discord_listener(ctx, ev, app)),
 		..Default::default()
 	};
 
-	Framework::builder()
-		.token(&env_config.discord_token)
-		.intents(
-			GatewayIntents::MESSAGE_CONTENT | GatewayIntents::DIRECT_MESSAGES | GatewayIntents::GUILD_MESSAGES | GatewayIntents::GUILDS,
-		)
+	let framework = Framework::builder()
 		.setup(move |_ctx, _ready, _framework| {
 			Box::pin(async move {
 				let template_dir = format!("{}/{}", env_config.template_dir, "*.txt");
@@ -140,22 +136,33 @@ async fn main() -> Result<()> {
 		})
 		.options(poise_options)
 		.initialize_owners(false)
-		.run_autosharded()
-		.await
-		.into_diagnostic()
-		.wrap_err("failed to run discord client")?;
+		.build();
+
+	ClientBuilder::new(
+		&env_config.discord_token,
+		GatewayIntents::MESSAGE_CONTENT | GatewayIntents::DIRECT_MESSAGES | GatewayIntents::GUILD_MESSAGES | GatewayIntents::GUILDS,
+	)
+	.framework(framework)
+	.await
+	.into_diagnostic()
+	.wrap_err("failed to create discord client")
+	.unwrap()
+	.start_autosharded()
+	.await
+	.into_diagnostic()
+	.wrap_err("failed to start discord client")?;
 
 	Ok(())
 }
 
-async fn discord_listener<'a>(ctx: &'a poise::serenity_prelude::Context, ev: &'a Event<'a>, app: &'a AppState) -> Result<()> {
+async fn discord_listener<'a>(ctx: &'a poise::serenity_prelude::Context, ev: &'a FullEvent, app: &'a AppState) -> Result<()> {
 	match ev {
-		Event::Message {
+		FullEvent::Message {
 			new_message,
 		} => {
 			let span = info_span!("message", author = %new_message.author.name, content = %new_message.content);
 
-			let our_id = ctx.cache.current_user_id();
+			let our_id = ctx.cache.current_user().id;
 
 			// ignore messages from bots or ourselves (we are a bot, but just in case)
 			if new_message.author.bot || new_message.author.id == our_id {
@@ -166,7 +173,7 @@ async fn discord_listener<'a>(ctx: &'a poise::serenity_prelude::Context, ev: &'a
 			let concerned = {
 				// TODO: if user opted out, we instead send a message that we won't reply
 
-				let mentioned = new_message.mentions_user_id(ctx.cache.current_user_id());
+				let mentioned = new_message.mentions_user_id(our_id);
 				let in_dm = new_message.is_private();
 				let replied_to_us = new_message
 					.referenced_message
@@ -182,10 +189,11 @@ async fn discord_listener<'a>(ctx: &'a poise::serenity_prelude::Context, ev: &'a
 
 			handle_completion(ctx, app, new_message).instrument(span).await?;
 		},
-		Event::MessageUpdate {
-			new, ..
+		FullEvent::MessageUpdate {
+			new: Some(new), ..
 		} => {
 			// TODO: invalidate moderation cache for message
+			debug!("message {} updated, invalidating cache", new.id);
 		},
 		_ => {},
 	}
