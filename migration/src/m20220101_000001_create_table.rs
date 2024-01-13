@@ -1,5 +1,7 @@
 use sea_orm_migration::prelude::*;
 
+use crate::SchemaStatement::IndexStatement;
+
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -82,8 +84,10 @@ impl MigrationTrait for Migration {
 			.create_table(
 				Table::create()
 					.table(RateLimit::Table)
-					.col(ColumnDef::new(RateLimit::Path).string().not_null().primary_key())
+					.col(ColumnDef::new(RateLimit::Path).string().not_null())
+					.col(ColumnDef::new(RateLimit::Period).big_unsigned().not_null())
 					.col(ColumnDef::new(RateLimit::State).big_unsigned().not_null())
+					.primary_key(IndexCreateStatement::new().col(RateLimit::Path).col(RateLimit::Period))
 					.to_owned(),
 			)
 			.await?;
@@ -182,6 +186,9 @@ enum RateLimit {
 
 	/// Path describing the rate limit.
 	Path,
+
+	/// Period for which the rate limit is valid.
+	Period,
 
 	/// The start of the rate limit.
 	State,

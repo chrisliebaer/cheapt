@@ -7,6 +7,8 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false)]
 	pub path: String,
+	#[sea_orm(primary_key, auto_increment = false)]
+	pub period: u64,
 	pub state: u64,
 }
 

@@ -1,32 +1,53 @@
 use std::{
 	collections::HashMap,
+	future::Future,
 	num::{
 		NonZeroU32,
 		NonZeroU64,
 	},
+	process::Output,
 	time::{
 		Duration,
 		Instant,
+		SystemTime,
 	},
 };
 
-use governor::{
-	clock::MonotonicClock,
-	middleware::NoOpMiddleware,
-	Quota,
-	RateLimiter,
+use async_trait::async_trait;
+use chrono::{
+	format::Numeric::Timestamp,
+	DateTime,
+	Utc,
+};
+use entity::{
+	prelude::RateLimit,
+	rate_limit,
 };
 use lazy_static::lazy_static;
+use miette::{
+	IntoDiagnostic,
+	Report,
+	Result,
+	WrapErr,
+};
+use sea_orm::{
+	ActiveModelTrait,
+	ActiveValue::Set,
+	ColumnTrait,
+	DatabaseConnection,
+	DbErr,
+	EntityTrait,
+	QueryFilter,
+	TransactionTrait,
+	TryFromU64,
+};
 use serde::{
 	Deserialize,
 	Serialize,
 };
 use tracing::trace;
 
-use crate::rate_limiter::{
-	HashMapStateStore,
-	PathKey,
-};
+use crate::gcre::GCRAConfig;
 
 lazy_static! {
 	static ref KEY_VARIABLE_REGEX: regex::Regex = regex::Regex::new(r"\{(?P<key>[a-zA-Z0-9_]+)\}").unwrap();
@@ -36,30 +57,108 @@ struct RateLimitConfig {
 	limits: HashMap<String, Vec<RateLimitLine>>,
 }
 
-type SomethingRateLimiter = RateLimiter<PathKey, HashMapStateStore<PathKey>, MonotonicClock, NoOpMiddleware<Instant>>;
-struct SomethingSomethingRateLimiter {
+struct PathRateLimits {
 	/// Contains a list of routes and their template strings
-	route_limits: Vec<(Vec<String>, String, Vec<SomethingRateLimiter>)>,
+	route_limits: Vec<(Vec<String>, String, Vec<GCRAConfig>)>,
 }
 
-impl SomethingSomethingRateLimiter {
-	fn test_key_check(&self, map: &HashMap<String, String>) {
+enum DbAction {
+	Insert(rate_limit::ActiveModel),
+	Update(rate_limit::ActiveModel),
+}
+
+impl PathRateLimits {
+	async fn test_key_check(&self, map: &HashMap<String, String>, db: &DatabaseConnection) -> Result<()> {
+		let now = Utc::now();
+
 		for (required_keys, format, rate_limiters) in &self.route_limits {
 			// check if the map contains all the required keys, otherwise this limit doesn't apply
 			if !required_keys.iter().all(|key| map.contains_key(key)) {
 				continue;
 			}
 
-			// evaluate the template string to get concrete route
-			let route = KEY_VARIABLE_REGEX
+			// evaluate the template string to get concrete path
+			let path = KEY_VARIABLE_REGEX
 				.replace_all(&format, |caps: &regex::Captures| {
 					let key = caps.name("key").unwrap().as_str();
 					map.get(key).unwrap()
 				})
 				.to_string();
 
-			trace!("hit route: {}", route);
+			trace!("hit path: {}", path);
+
+			// fetch the rate limit state for this path
+			let states = RateLimit::find()
+				.filter(rate_limit::Column::Path.eq(path.clone()))
+				.all(db)
+				.await
+				.into_diagnostic()
+				.wrap_err("failed to fetch rate limit state")?;
+
+			// track new rate limit states and commit them at the end, if all checks pass
+			let mut actions = Vec::new();
+
+			// check all rate limiters on this route
+			let mut allowed = true;
+			for gcra in rate_limiters {
+				// check if rate limit state exists
+				let period = gcra.period.as_millis() as u64;
+				let state = states.iter().find(|state| state.period == period);
+				let tob = state.map(|state| DateTime::<Utc>::try_from_u64(state.state).unwrap());
+
+				match gcra.check(now, tob, 1.try_into().unwrap()) {
+					Some(tob) => {
+						// pass
+						let action = match state {
+							Some(state) => {
+								// update
+								let mut state: rate_limit::ActiveModel = state.clone().into();
+								state.state = Set(tob.timestamp_millis() as u64);
+								DbAction::Update(state)
+							},
+							None => {
+								// insert
+								DbAction::Insert(rate_limit::ActiveModel {
+									path: Set(path.clone()),
+									period: Set(period),
+									state: Set(tob.timestamp_millis() as u64),
+								})
+							},
+						};
+						actions.push(action);
+					},
+					None => {
+						// rate limit exceeded
+						allowed = false;
+						break;
+					},
+				};
+			}
+
+			if !allowed {
+				// rate limit exceeded, database won't be touched
+				continue;
+			}
+
+			// commit all rate limit state changes in single transaction
+			db.transaction::<_, (), DbErr>(|tx| {
+				Box::pin(async move {
+					for action in actions {
+						match action {
+							DbAction::Insert(state) => state.insert(tx).await?,
+							DbAction::Update(state) => state.update(tx).await?,
+						};
+					}
+
+					Ok(())
+				})
+			})
+			.await
+			.into_diagnostic()
+			.wrap_err("failed to commit rate limit state changes")?;
 		}
+
+		Ok(())
 	}
 }
 
@@ -90,68 +189,13 @@ impl Into<Duration> for &Slice {
 struct RateLimitLine {
 	#[serde(flatten)]
 	slice: Slice,
-	requests: NonZeroU32,
+	quota: NonZeroU32,
+	burst: Option<NonZeroU32>,
 }
 
-impl Into<Quota> for &RateLimitLine {
-	fn into(self) -> Quota {
-		let requests = self.requests;
-		let duration: Duration = (&self.slice).into();
-		let duration = duration.div_f64(requests.get() as f64);
-
-		Quota::with_period(duration).unwrap().allow_burst(requests)
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use std::num::{
-		NonZeroU32,
-		NonZeroU64,
-	};
-
-	use super::*;
-
-	fn bounds_helper(actual: Duration) -> (Duration, Duration) {
-		let actual = actual.clone();
-		let lower = actual - actual / 10;
-		let upper = actual + actual / 10;
-		(lower, upper)
-	}
-
-	fn test_builder(slice: Slice, requests: NonZeroU32) {
-		let rate_limit_line = RateLimitLine {
-			slice,
-			requests,
-		};
-		let quota: Quota = (&rate_limit_line).into();
-
-		let (lower, upper) = bounds_helper((&rate_limit_line.slice).into());
-		assert!(quota.burst_size_replenished_in() > lower);
-		assert!(quota.burst_size_replenished_in() < upper);
-	}
-
-	#[test]
-	fn test_rate_limit_line_into_quota() {
-		let numbers: Vec<u32> = vec![1, 5, 10, 20, 60, 51, 500];
-
-		for i in &numbers {
-			for j in &numbers {
-				let nz = NonZeroU64::new((*i).into()).unwrap();
-				let slices = vec![Slice::Seconds(nz), Slice::Minutes(nz), Slice::Hours(nz), Slice::Days(nz)];
-
-				for slice in slices {
-					let rate_limit_line = RateLimitLine {
-						slice: slice.clone(),
-						requests: NonZeroU32::new(*j).unwrap(),
-					};
-					let quota: Quota = (&rate_limit_line).into();
-
-					let (lower, upper) = bounds_helper((&rate_limit_line.slice).into());
-					assert!(quota.burst_size_replenished_in() > lower);
-					assert!(quota.burst_size_replenished_in() < upper);
-				}
-			}
-		}
+impl<B: AsRef<RateLimitLine>> From<B> for GCRAConfig {
+	fn from(line: B) -> Self {
+		let line = line.as_ref();
+		Self::new((&line.slice).into(), line.quota, line.burst)
 	}
 }

@@ -1,26 +1,16 @@
 mod completion;
 mod context_extraction;
+mod gcre;
 mod invocation_builder;
 mod rate_limit_config;
-mod rate_limiter;
 
-use std::{
-	num::NonZeroU32,
-	time::Duration,
-};
+use std::time::Duration;
 
 use async_openai::{
 	config::OpenAIConfig,
 	Client,
 };
-use entity::prelude::RateLimit;
 use envconfig::Envconfig;
-use governor::{
-	clock::MonotonicClock,
-	middleware::NoOpMiddleware,
-	Quota,
-	RateLimiter,
-};
 use lazy_static::lazy_static;
 use miette::{
 	IntoDiagnostic,
@@ -62,11 +52,6 @@ use tracing::{
 use crate::{
 	completion::handle_completion,
 	context_extraction::InvocationContextSettings,
-	rate_limiter::{
-		HashMapStateStore,
-		PathKey,
-		PersistantHashMapStateStore,
-	},
 };
 
 lazy_static! {
@@ -144,18 +129,6 @@ async fn main() -> Result<()> {
 	};
 
 	let rate_limiter = {
-		let lines = RateLimit::find()
-			.all(&db)
-			.await
-			.into_diagnostic()
-			.wrap_err("failed to load rate limits")?;
-
-		// load rate limiter state from database
-		let store = HashMapStateStore::load(lines.into()).wrap_err("failed to load rate limiter")?;
-
-		let clock = MonotonicClock::default();
-		let rate_limiter =
-			RateLimiter::<PathKey, _, _, NoOpMiddleware<_>>::new(Quota::per_hour(NonZeroU32::new(5).unwrap()), store, &clock);
 
 		// start background worker to periodically persist rate limiter state
 	};
