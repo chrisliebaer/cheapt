@@ -1,18 +1,36 @@
 mod completion;
 mod context_extraction;
 mod invocation_builder;
+mod rate_limit_config;
+mod rate_limiter;
+
+use std::{
+	num::NonZeroU32,
+	time::Duration,
+};
 
 use async_openai::{
 	config::OpenAIConfig,
 	Client,
 };
+use entity::prelude::RateLimit;
 use envconfig::Envconfig;
+use governor::{
+	clock::MonotonicClock,
+	middleware::NoOpMiddleware,
+	Quota,
+	RateLimiter,
+};
 use lazy_static::lazy_static;
 use miette::{
 	IntoDiagnostic,
 	Report,
 	Result,
 	WrapErr,
+};
+use migration::{
+	Migrator,
+	MigratorTrait,
 };
 use poise::{
 	serenity_prelude::{
@@ -24,6 +42,12 @@ use poise::{
 	Framework,
 	FrameworkError,
 	FrameworkOptions,
+};
+use sea_orm::{
+	ConnectOptions,
+	Database,
+	DatabaseConnection,
+	EntityTrait,
 };
 use tera::Tera;
 use tracing::{
@@ -38,6 +62,11 @@ use tracing::{
 use crate::{
 	completion::handle_completion,
 	context_extraction::InvocationContextSettings,
+	rate_limiter::{
+		HashMapStateStore,
+		PathKey,
+		PersistantHashMapStateStore,
+	},
 };
 
 lazy_static! {
@@ -56,6 +85,9 @@ struct EnvConfig {
 	#[envconfig(from = "DISCORD_TOKEN")]
 	discord_token: String,
 
+	#[envconfig(from = "DATABASE_URL")]
+	database_url: String,
+
 	#[envconfig(from = "TEMPLATE_DIR", default = "templates")]
 	template_dir: String,
 }
@@ -63,6 +95,7 @@ struct EnvConfig {
 struct AppState {
 	tera: Tera,
 	openai_client: Client<OpenAIConfig>,
+	db: DatabaseConnection,
 	context_settings: InvocationContextSettings,
 }
 
@@ -74,6 +107,61 @@ async fn main() -> Result<()> {
 	let env_config = EnvConfig::init_from_env()
 		.into_diagnostic()
 		.wrap_err("failed to load environment variables")?;
+
+	let tera = {
+		let template_dir = format!("{}/{}", env_config.template_dir, "*.txt");
+		Tera::new(&template_dir)
+			.into_diagnostic()
+			.wrap_err("failed to load templates")?
+	};
+
+	let openai_client = {
+		let config = OpenAIConfig::new().with_api_key(&env_config.openai_token);
+		Client::with_config(config)
+	};
+
+	let db = {
+		let mut opt = ConnectOptions::new(env_config.database_url);
+		opt
+			.max_connections(5)
+			.min_connections(1)
+			.connect_timeout(Duration::from_secs(5))
+			.acquire_timeout(Duration::from_secs(10))
+			.idle_timeout(Duration::from_secs(60))
+			.sqlx_logging(false);
+
+		let db = Database::connect(opt)
+			.await
+			.into_diagnostic()
+			.wrap_err("failed to connect to database")?;
+
+		db.ping().await.into_diagnostic().wrap_err("failed to ping database")?;
+		Migrator::up(&db, None)
+			.await
+			.into_diagnostic()
+			.wrap_err("failed to run migrations")?;
+		db
+	};
+
+	let rate_limiter = {
+		let lines = RateLimit::find()
+			.all(&db)
+			.await
+			.into_diagnostic()
+			.wrap_err("failed to load rate limits")?;
+
+		// load rate limiter state from database
+		let store = HashMapStateStore::load(lines.into()).wrap_err("failed to load rate limiter")?;
+
+		let clock = MonotonicClock::default();
+		let rate_limiter =
+			RateLimiter::<PathKey, _, _, NoOpMiddleware<_>>::new(Quota::per_hour(NonZeroU32::new(5).unwrap()), store, &clock);
+
+		// start background worker to periodically persist rate limiter state
+	};
+
+	// exit process since we are currently testing the rate limiter
+	std::process::exit(0);
 
 	// setup discord client with serenity
 	let poise_options = FrameworkOptions {
@@ -115,15 +203,10 @@ async fn main() -> Result<()> {
 	let framework = Framework::builder()
 		.setup(move |_ctx, _ready, _framework| {
 			Box::pin(async move {
-				let template_dir = format!("{}/{}", env_config.template_dir, "*.txt");
 				Ok(AppState {
-					tera: Tera::new(&template_dir)
-						.into_diagnostic()
-						.wrap_err("failed to load templates")?,
-					openai_client: {
-						let config = OpenAIConfig::new().with_api_key(&env_config.openai_token);
-						Client::with_config(config)
-					},
+					tera,
+					openai_client,
+					db,
 					context_settings: InvocationContextSettings {
 						max_token_count: 2000,
 						max_channel_history: Some(10),
@@ -187,7 +270,13 @@ async fn discord_listener<'a>(ctx: &'a poise::serenity_prelude::Context, ev: &'a
 				return Ok(());
 			}
 
-			handle_completion(ctx, app, new_message).instrument(span).await?;
+			if let Err(e) = handle_completion(ctx, app, new_message).instrument(span).await {
+				new_message
+					.reply_ping(ctx, format!("Error: {}", e))
+					.await
+					.into_diagnostic()
+					.wrap_err("failed to send error message")?;
+			}
 		},
 		FullEvent::MessageUpdate {
 			new: Some(new), ..

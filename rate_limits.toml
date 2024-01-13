@@ -1,0 +1,24 @@
+[limits]
+
+# global affects all requests across the entire instance
+"global" = [
+		{ seconds = 1, requests = 10 },
+		{ minutes = 10, requests = 100 },
+		{ days = 1, requests = 500 },
+]
+
+"guild/{guild_id}" = [
+		{ seconds = 1, requests = 3 },
+		{ minutes = 1, requests = 10 },
+		{ hours = 1, requests = 30 },
+]
+
+"channel/{channel_id}" = [
+		{ seconds = 5, requests = 1 },
+]
+
+"user/{user_id}" = [
+		{ seconds = 15, requests = 2 },
+		{ minutes = 1, requests = 10 },
+		{ hours = 6, requests = 60 },
+]
