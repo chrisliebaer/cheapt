@@ -36,7 +36,7 @@ use serde::{
 	Deserialize,
 	Serialize,
 };
-use tracing::trace;
+use tracing::debug;
 
 use crate::gcra::GCRAConfig;
 
@@ -103,7 +103,7 @@ enum DbAction {
 }
 
 impl PathRateLimits {
-	pub async fn check_route_with_context(&self, map: &HashMap<String, String>, db: &DatabaseConnection) -> Result<bool> {
+	pub async fn check_route_with_context(&self, map: &HashMap<&str, String>, db: &DatabaseConnection) -> Result<bool> {
 		let now = Utc::now();
 
 		// track new rate limit states and commit them at the end, if all checks pass
@@ -111,7 +111,7 @@ impl PathRateLimits {
 
 		for (required_keys, format, rate_limiters) in &self.route_limits {
 			// check if the map contains all the required keys, otherwise this limit doesn't apply
-			if !required_keys.iter().all(|key| map.contains_key(key)) {
+			if !required_keys.iter().all(|key| map.contains_key(key.as_str())) {
 				continue;
 			}
 
@@ -123,8 +123,6 @@ impl PathRateLimits {
 				})
 				.to_string();
 
-			trace!("hit path: {}", path);
-
 			// fetch the rate limit state for this path
 			let states = RateLimit::find()
 				.filter(rate_limit::Column::Path.eq(path.clone()))
@@ -134,7 +132,6 @@ impl PathRateLimits {
 				.wrap_err("failed to fetch rate limit state")?;
 
 			// check all rate limiters on this route
-			let mut allowed = true;
 			for gcra in rate_limiters {
 				// check if rate limit state exists
 				let period = gcra.period.as_millis() as u64;
@@ -143,14 +140,22 @@ impl PathRateLimits {
 					.map(|state| state.state)
 					.map(|milis| DateTime::<Utc>::from_timestamp((milis / 1000) as i64, ((milis % 1000) * 1_000_000) as u32).unwrap());
 
-				match gcra.check(now, tob, 1.try_into().unwrap()) {
+				let new_tob = gcra.check(now, tob, 1.try_into().unwrap());
+				match new_tob {
 					Some(tob) => {
+						let remaining = gcra.remaining(now, Some(tob));
+						let used = gcra.burst - remaining + 1;
+						debug!(path = %path, period = period, remaining = remaining, used = used, "rate limit pass");
+
+						// unpack for database operations
+						let tob = tob.timestamp_millis() as u64;
+
 						// pass
 						let action = match state {
 							Some(state) => {
 								// update
 								let mut state: rate_limit::ActiveModel = state.clone().into();
-								state.state = Set(tob.timestamp_millis() as u64);
+								state.state = Set(tob);
 								DbAction::Update(state)
 							},
 							None => {
@@ -158,7 +163,7 @@ impl PathRateLimits {
 								DbAction::Insert(rate_limit::ActiveModel {
 									path: Set(path.clone()),
 									period: Set(period),
-									state: Set(tob.timestamp_millis() as u64),
+									state: Set(tob),
 								})
 							},
 						};
@@ -166,15 +171,14 @@ impl PathRateLimits {
 					},
 					None => {
 						// rate limit exceeded
-						allowed = false;
-						break;
+						let remaining = gcra.remaining(now, tob);
+						let used = gcra.burst - remaining + 1;
+						debug!(path = %path, period = period, remaining = remaining, used = used, "rate limit fail");
+
+						// rate limit exceeded, database won't be touched
+						return Ok(false);
 					},
 				};
-			}
-
-			if !allowed {
-				// rate limit exceeded, database won't be touched
-				return Ok(false);
 			}
 		}
 
@@ -227,7 +231,7 @@ struct RateLimitLine {
 	#[serde(flatten)]
 	slice: Slice,
 	quota: NonZeroU32,
-	burst: Option<NonZeroU32>,
+	burst: Option<u32>,
 }
 
 impl<T: Borrow<RateLimitLine>> From<T> for GCRAConfig {

@@ -37,9 +37,9 @@ use sea_orm::{
 	ConnectOptions,
 	Database,
 	DatabaseConnection,
-	EntityTrait,
 };
 use tera::Tera;
+use tokio::sync::Mutex;
 use tracing::{
 	debug,
 	error,
@@ -52,7 +52,6 @@ use tracing::{
 use crate::{
 	completion::handle_completion,
 	context_extraction::InvocationContextSettings,
-	gcra::GCRAConfig,
 	rate_limit_config::{
 		PathRateLimits,
 		RateLimitConfig,
@@ -81,7 +80,7 @@ struct EnvConfig {
 	#[envconfig(from = "TEMPLATE_DIR", default = "templates")]
 	template_dir: String,
 
-	#[envconfig(from = "RATE_LIMIT_CONFIG", default = "rate_limit_config.toml")]
+	#[envconfig(from = "RATE_LIMIT_CONFIG", default = "rate_limits.toml")]
 	rate_limit_config: String,
 }
 
@@ -89,6 +88,7 @@ struct AppState {
 	tera: Tera,
 	openai_client: Client<OpenAIConfig>,
 	db: DatabaseConnection,
+	path_rate_limits: Mutex<PathRateLimits>,
 	context_settings: InvocationContextSettings,
 }
 
@@ -136,16 +136,13 @@ async fn main() -> Result<()> {
 		db
 	};
 
-	let rate_limiter = {
+	let path_rate_limits: PathRateLimits = {
 		// start background worker to periodically persist rate limiter state
 		let rate_limit_config =
 			RateLimitConfig::from_file(&env_config.rate_limit_config).wrap_err("failed to load rate limit config")?;
 
-		let mut path_rate_limits: PathRateLimits = rate_limit_config.into();
+		rate_limit_config.into()
 	};
-
-	// exit process since we are currently testing the rate limiter
-	std::process::exit(0);
 
 	// setup discord client with serenity
 	let poise_options = FrameworkOptions {
@@ -171,7 +168,11 @@ async fn main() -> Result<()> {
 				// it
 				if let Some(err) = err {
 					error!(error = ?err, "generic error in bot framework");
-				} else if let Err(e) = poise::builtins::on_error(error).await {
+					return;
+				}
+
+				error!("generic error in bot framework: {}", error);
+				if let Err(e) = poise::builtins::on_error(error).await {
 					error!("Error while notifying user about error: {}", e);
 				}
 			})
@@ -191,6 +192,7 @@ async fn main() -> Result<()> {
 					tera,
 					openai_client,
 					db,
+					path_rate_limits: Mutex::new(path_rate_limits),
 					context_settings: InvocationContextSettings {
 						max_token_count: 2000,
 						max_channel_history: Some(10),

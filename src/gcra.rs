@@ -11,7 +11,9 @@ use chrono::{
 	DateTime,
 	Utc,
 };
+use tracing::instrument;
 
+// TODO: allow burst to be zero
 #[derive(Debug)]
 pub struct GCRAConfig {
 	/// Duration for which the rate limit is defined.
@@ -21,7 +23,7 @@ pub struct GCRAConfig {
 	pub quota: NonZeroU32,
 
 	/// The maximum amount of quote that can accumulate.
-	pub burst: NonZeroU32,
+	pub burst: u32,
 
 	/// The interval between two emissions.
 	emission_interval: Duration,
@@ -31,11 +33,11 @@ pub struct GCRAConfig {
 }
 
 impl GCRAConfig {
-	pub fn new(period: Duration, quota: NonZeroU32, burst: Option<NonZeroU32>) -> Self {
+	pub fn new(period: Duration, quota: NonZeroU32, burst: Option<u32>) -> Self {
 		// If burst is not defined, it’s assumed to be equal to quota
-		let burst = burst.unwrap_or(quota);
+		let burst = burst.unwrap_or(quota.get() - 1);
 		let emission_interval = period.div_f64(quota.get() as f64);
-		let delay_tolerance = emission_interval.mul_f64(burst.get() as f64);
+		let delay_tolerance = emission_interval.mul_f64(burst as f64);
 
 		Self {
 			period,
@@ -55,6 +57,7 @@ impl GCRAConfig {
 	/// * `now` - The current time.
 	/// * `tob` - The time of burst, which is the time at which the entire burst is available.
 	/// * `amount` - The amount of quota to consume.
+	#[instrument]
 	pub fn check(&self, now: DateTime<Utc>, tob: Option<DateTime<Utc>>, amount: NonZeroU32) -> Option<DateTime<Utc>> {
 		// normally gcra implementations work with tat, the theoretical arrival time
 		// this implementation is instead using the time of burst (tob), which describes the time at which the entire burst is
@@ -71,7 +74,9 @@ impl GCRAConfig {
 		let tat = tob.map(|tob| max(tob - self.delay_tolerance, now)).unwrap_or(now);
 		let allow_at = tat - self.delay_tolerance;
 
-		if now > allow_at {
+		// TODO: when allowing zero, this needs to be fixed, for initial call it would always be blocked and requires greater or
+		// equal
+		if now >= allow_at {
 			// allow the request
 			Some(tat + increment + self.delay_tolerance)
 		} else {
@@ -95,13 +100,16 @@ impl GCRAConfig {
 	/// The remaining quota as an `u32` value.
 	pub fn remaining(&self, now: DateTime<Utc>, tob: Option<DateTime<Utc>>) -> u32 {
 		let tat = tob.map(|tob| max(tob - self.delay_tolerance, now)).unwrap_or(now);
-		let allow_at = tat - self.emission_interval.mul_f64(self.burst.get() as f64);
+		let allow_at = tat - self.emission_interval.mul_f64(self.burst as f64);
 
-		let delta = (now - allow_at).to_std().unwrap();
-		let remaining = delta.as_millis() as f64 / self.emission_interval.as_millis() as f64;
-
-		// if remaining is negative, we return 0
-		max(0, min(self.burst.get() as i64, remaining as i64)) as u32
+		match (now - allow_at).to_std() {
+			Ok(delta) => {
+				let remaining = delta.as_millis() as f64 / self.emission_interval.as_millis() as f64;
+				// if remaining is negative, we return 0
+				max(0, min(self.burst as i64, remaining as i64)) as u32 + 1
+			},
+			Err(_) => 0,
+		}
 	}
 }
 
@@ -137,7 +145,6 @@ mod tests {
 	where F: Fn(GCRAConfig) {
 		let period = Duration::from_secs(period.into());
 		let quota = NonZeroU32::new(quota).unwrap();
-		let burst = burst.map(|b| NonZeroU32::new(b).unwrap());
 		let config = GCRAConfig::new(period, quota, burst);
 		f(config);
 	}
@@ -148,14 +155,14 @@ mod tests {
 		new_test_gcra(60, 10, Some(5), |config| {
 			assert_eq!(config.period, Duration::from_secs(60));
 			assert_eq!(config.quota, NonZeroU32::new(10).unwrap());
-			assert_eq!(config.burst, NonZeroU32::new(5).unwrap());
+			assert_eq!(config.burst, 5);
 		});
 
 		// without burst
 		new_test_gcra(60, 10, None, |config| {
 			assert_eq!(config.period, Duration::from_secs(60));
 			assert_eq!(config.quota, NonZeroU32::new(10).unwrap());
-			assert_eq!(config.burst, NonZeroU32::new(10).unwrap());
+			assert_eq!(config.burst, 9);
 		});
 	}
 
@@ -185,7 +192,7 @@ mod tests {
 			let amount = NonZeroU32::new(1).unwrap();
 
 			// deplete all quota
-			for i in 0..10 {
+			for _ in 0..10 {
 				assert!(wrapper.check(now, amount).is_some());
 			}
 
@@ -228,8 +235,8 @@ mod tests {
 			let end = now + Duration::from_secs(120); // 120 seconds later
 			let normal_amount = NonZeroU32::new(1).unwrap();
 
-			// Check that burst works correctly
-			for _ in 0..5 {
+			// Check that burst works correctly (first has one + burst)
+			for _ in 0..6 {
 				assert!(wrapper.check(now, normal_amount).is_some());
 			}
 			// No quota should be left
@@ -244,9 +251,9 @@ mod tests {
 			assert_eq!(wrapper.remaining(middle), 0);
 			assert!(wrapper.check(middle, normal_amount).is_none());
 
-			// After 120 seconds, only 5 requests should be allowed, since burst is 5
-			assert_eq!(wrapper.remaining(end), 5);
-			for _ in 0..5 {
+			// After 120 seconds, only 6 requests should be allowed, since burst is 5
+			assert_eq!(wrapper.remaining(end), 6);
+			for _ in 0..6 {
 				assert!(wrapper.check(end, normal_amount).is_some());
 			}
 
@@ -360,7 +367,7 @@ mod tests {
 	#[test]
 	fn invalid_remaining_quota_with_no_requests() {
 		new_test_gcra(60, 10, None, |config| {
-			let mut wrapper = TestWrapper::new(config);
+			let wrapper = TestWrapper::new(config);
 			let now = Utc::now();
 
 			// The remaining quota should be equal to total quota initially
@@ -390,6 +397,27 @@ mod tests {
 			// Even after half period, the remaining quota should still be 0 as full period has not ended yet
 			let half_period_later = now + Duration::from_secs(30);
 			assert_eq!(wrapper.remaining(half_period_later), 0);
+		});
+	}
+
+	#[test]
+	fn slow_limit_fast_requests() {
+		new_test_gcra(86400000, 10, None, |config| {
+			let mut wrapper = TestWrapper::new(config);
+
+			let amount = NonZeroU32::new(1).unwrap();
+
+			let mut now = Utc::now();
+			for i in 0..10 {
+				assert_eq!(wrapper.remaining(now), 10 - i);
+				assert!(wrapper.check(now, amount).is_some());
+
+				now += Duration::from_millis(200);
+			}
+
+			assert_eq!(wrapper.remaining(now), 0);
+			assert!(wrapper.check(now, amount).is_none());
+			assert_eq!(wrapper.remaining(now), 0);
 		});
 	}
 }

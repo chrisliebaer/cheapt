@@ -14,7 +14,7 @@
 ]
 
 "channel/{channel_id}" = [
-		{ seconds = 5, quota = 1 },
+		{ seconds = 5, quota = 2 },
 ]
 
 "user/{user_id}" = [
