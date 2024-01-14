@@ -99,7 +99,7 @@ pub async fn handle_completion(ctx: &poise::serenity_prelude::Context, app: &App
 				.into_diagnostic()
 				.wrap_err("failed to delete rate limit message")?;
 
-			return Ok(());
+			Ok(())
 		})
 		.await
 		.into_diagnostic()

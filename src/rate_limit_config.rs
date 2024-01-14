@@ -76,7 +76,7 @@ impl<T: Borrow<RateLimitConfig>> From<T> for PathRateLimits {
 
 			// use regex to extract keys from path
 			let keys: Vec<String> = KEY_VARIABLE_REGEX
-				.captures_iter(&path)
+				.captures_iter(path)
 				.map(|caps| caps.name("key").unwrap().as_str().to_string())
 				.collect();
 
@@ -117,7 +117,7 @@ impl PathRateLimits {
 
 			// evaluate the template string to get concrete path
 			let path = KEY_VARIABLE_REGEX
-				.replace_all(&format, |caps: &regex::Captures| {
+				.replace_all(format, |caps: &regex::Captures| {
 					let key = caps.name("key").unwrap().as_str();
 					map.get(key).unwrap()
 				})
@@ -215,9 +215,9 @@ enum Slice {
 	Days(NonZeroU64),
 }
 
-impl Into<Duration> for &Slice {
-	fn into(self) -> Duration {
-		match self {
+impl From<&Slice> for Duration {
+	fn from(val: &Slice) -> Self {
+		match val {
 			Slice::Seconds(n) => Duration::from_secs(n.get()),
 			Slice::Minutes(n) => Duration::from_secs(n.get() * 60),
 			Slice::Hours(n) => Duration::from_secs(n.get() * 60 * 60),
@@ -285,8 +285,7 @@ mod tests {
 					{ seconds = 1, quota = 1 },
 			]
 		"#;
-		let config = toml::from_str::<RateLimitConfig>(str).unwrap();
-		config
+		toml::from_str::<RateLimitConfig>(str).unwrap()
 	}
 
 	fn get_route_by_name<'a>(name: &str, config: &'a PathRateLimits) -> &'a Route {
@@ -298,7 +297,7 @@ mod tests {
 
 		assert_eq!(routes.len(), 1);
 
-		&routes[0]
+		routes[0]
 	}
 
 	fn db_backed_rate_limiter() -> (MockDatabase, PathRateLimits) {
@@ -428,10 +427,7 @@ mod tests {
 			.append_query_results([vec![exceed_model, allowed_model]])
 			.into_connection();
 
-		assert_eq!(
-			path_rate_limits.check_route_with_context(&HashMap::new(), &db).await.unwrap(),
-			false
-		);
+		assert!(path_rate_limits.check_route_with_context(&HashMap::new(), &db).await.unwrap());
 
 		let log = db.into_transaction_log();
 		// we expect a single query, and no update query since the rate limit was exceeded
