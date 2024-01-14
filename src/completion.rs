@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use async_openai::types::{
 	ChatCompletionRequestMessage,
 	ChatCompletionRequestSystemMessage,
@@ -77,6 +79,38 @@ impl From<&poise::serenity_prelude::User> for UserContext {
 }
 
 pub async fn handle_completion(ctx: &poise::serenity_prelude::Context, app: &AppState, new_message: &Message) -> Result<()> {
+	if !check_rate_limit(new_message, app).await? {
+		// prevent user from spamming us with timeout
+		let error_report_future = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+			let rate_limited_message = new_message
+				.reply(
+					ctx,
+					"You are sending too many messages, please wait a bit before sending more.",
+				)
+				.await
+				.into_diagnostic()
+				.wrap_err("failed to send rate limit message")?;
+
+			tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+			rate_limited_message
+				.delete(ctx)
+				.await
+				.into_diagnostic()
+				.wrap_err("failed to delete rate limit message")?;
+
+			Ok(())
+		})
+		.await
+		.into_diagnostic()
+		.wrap_err("failed to send rate limit message");
+
+		return error_report_future.unwrap_or_else(|_| {
+			// timeout, don't care
+			Ok(())
+		});
+	}
+
 	let typing_notification = typing_indicator(ctx, new_message.channel_id);
 
 	let completion_request = tokio::time::timeout(
@@ -101,6 +135,21 @@ pub async fn handle_completion(ctx: &poise::serenity_prelude::Context, app: &App
 	result.wrap_err("failed to handle completion")?;
 
 	Ok(())
+}
+
+async fn check_rate_limit(new_message: &Message, app: &AppState) -> Result<bool> {
+	let mut context = HashMap::<&str, String>::new();
+	context.insert("user_id", new_message.author.id.to_string());
+	context.insert("channel_id", new_message.channel_id.to_string());
+	if let Some(guild_id) = new_message.guild_id {
+		context.insert("guild_id", guild_id.to_string());
+	}
+
+	let db = &app.db;
+	let limit = app.path_rate_limits.lock().await;
+	let pass = limit.check_route_with_context(&context, db).await?;
+
+	Ok(pass)
 }
 
 async fn create_tera_context<'a>(ctx: &'a poise::serenity_prelude::Context, message: &'a Message) -> Result<tera::Context> {
@@ -207,8 +256,8 @@ async fn generate_openai_response<'a>(
 	let request = CreateChatCompletionRequest {
 		model: "gpt-3.5-turbo".into(),
 		messages: request_messages,
-		top_p: Some(0.5),
-		temperature: Some(0.5),
+		top_p: Some(0.8),
+		temperature: Some(1.5),
 		max_tokens: Some(context_settings.max_token_count as u16),
 		..Default::default()
 	};

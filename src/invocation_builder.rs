@@ -29,11 +29,6 @@ lazy_static! {
 /// expected output and quality of the response.
 #[derive(Debug)]
 pub struct InvocationContextLore {
-	/// This lore describes what the user expects from the bot.
-	/// This can be used to control the output length, the quality of the output as well as giving the bot a persona to
-	/// use.
-	pub personality: Option<String>,
-
 	/// Lore about the current server. This provides additional information about the server which can not be immediately
 	/// inferred from the messages themself. Will be `None` if no lore has been provided or invocation was outside of a
 	/// server.

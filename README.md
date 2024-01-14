@@ -9,11 +9,11 @@ The bot is in a very early stage of development but already usable.
 - Dynamic context management
 - Flexible prompt customization using Tera templates
 - Handling of Discord specific formatting
+- Flexible rate limiting
 
 ## Planned Features
 - Per server prompt customization
 - Message reporting
-- Rate limiting
 - Message caching
 - Summarization for more context over multiple messages
 - Tenor GIF support
@@ -26,6 +26,7 @@ The project requires the following environment variables:
 - `OPENAI_TOKEN`: Your OpenAI API token.
 - `DISCORD_TOKEN`: Your Discord bot token.
 - `TEMPLATE_DIR`: The directory where your Tera templates are located. Defaults to `templates`.
+- `RATE_LIMIT_CONFIG`: The path to your rate limit configuration file. Defaults to `rate_limits.toml`.
 
 
 ## License
