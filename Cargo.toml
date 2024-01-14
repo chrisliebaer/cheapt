@@ -10,6 +10,7 @@ keywords = ["discord", "chat", "bot", "openai"]
 edition = "2021"
 license = "MIT"
 categories = ["games"]
+publish = false
 
 
 [dependencies]
