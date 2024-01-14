@@ -13,7 +13,6 @@ use chrono::{
 };
 use tracing::instrument;
 
-// TODO: allow burst to be zero
 #[derive(Debug)]
 pub struct GCRAConfig {
 	/// Duration for which the rate limit is defined.
@@ -74,8 +73,6 @@ impl GCRAConfig {
 		let tat = tob.map(|tob| max(tob - self.delay_tolerance, now)).unwrap_or(now);
 		let allow_at = tat - self.delay_tolerance;
 
-		// TODO: when allowing zero, this needs to be fixed, for initial call it would always be blocked and requires greater or
-		// equal
 		if now >= allow_at {
 			// allow the request
 			Some(tat + increment + self.delay_tolerance)
