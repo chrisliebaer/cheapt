@@ -1,6 +1,6 @@
 mod completion;
 mod context_extraction;
-mod gcre;
+mod gcra;
 mod invocation_builder;
 mod rate_limit_config;
 
@@ -52,6 +52,11 @@ use tracing::{
 use crate::{
 	completion::handle_completion,
 	context_extraction::InvocationContextSettings,
+	gcra::GCRAConfig,
+	rate_limit_config::{
+		PathRateLimits,
+		RateLimitConfig,
+	},
 };
 
 lazy_static! {
@@ -75,6 +80,9 @@ struct EnvConfig {
 
 	#[envconfig(from = "TEMPLATE_DIR", default = "templates")]
 	template_dir: String,
+
+	#[envconfig(from = "RATE_LIMIT_CONFIG", default = "rate_limit_config.toml")]
+	rate_limit_config: String,
 }
 
 struct AppState {
@@ -129,8 +137,11 @@ async fn main() -> Result<()> {
 	};
 
 	let rate_limiter = {
-
 		// start background worker to periodically persist rate limiter state
+		let rate_limit_config =
+			RateLimitConfig::from_file(&env_config.rate_limit_config).wrap_err("failed to load rate limit config")?;
+
+		let mut path_rate_limits: PathRateLimits = rate_limit_config.into();
 	};
 
 	// exit process since we are currently testing the rate limiter
@@ -261,4 +272,17 @@ async fn discord_listener<'a>(ctx: &'a poise::serenity_prelude::Context, ev: &'a
 	}
 
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use ctor::ctor;
+
+	#[ctor]
+	fn init_tests() {
+		// set RUST_LOG to trace for tests
+		std::env::set_var("RUST_LOG", "trace");
+
+		tracing_subscriber::fmt::init();
+	}
 }

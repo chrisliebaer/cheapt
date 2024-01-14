@@ -56,10 +56,10 @@ impl GCRAConfig {
 	/// * `tob` - The time of burst, which is the time at which the entire burst is available.
 	/// * `amount` - The amount of quota to consume.
 	pub fn check(&self, now: DateTime<Utc>, tob: Option<DateTime<Utc>>, amount: NonZeroU32) -> Option<DateTime<Utc>> {
-		// normally gcre implementations work with tat, the theoretical arrival time
+		// normally gcra implementations work with tat, the theoretical arrival time
 		// this implementation is instead using the time of burst (tob), which describes the time at which the entire burst is
 		// available. this allows the storage backend to discard all tob values which are in the past, without having to know
-		// the configuration of the respective gcre. this greatly simplifies cleanup.
+		// the configuration of the respective gcra. this greatly simplifies cleanup.
 
 		assert!(amount <= self.quota, "amount must be less than or equal to quota");
 
@@ -121,7 +121,6 @@ mod tests {
 		}
 
 		fn check(&mut self, now: DateTime<Utc>, amount: NonZeroU32) -> Option<DateTime<Utc>> {
-			let old = self.1;
 			let result = self.0.check(now, self.1, amount);
 			if result.is_some() {
 				self.1 = result;
@@ -134,7 +133,7 @@ mod tests {
 		}
 	}
 
-	fn new_test_gcre<F>(period: u32, quota: u32, burst: Option<u32>, f: F)
+	fn new_test_gcra<F>(period: u32, quota: u32, burst: Option<u32>, f: F)
 	where F: Fn(GCRAConfig) {
 		let period = Duration::from_secs(period.into());
 		let quota = NonZeroU32::new(quota).unwrap();
@@ -146,14 +145,14 @@ mod tests {
 	#[test]
 	fn test_setup() {
 		// with burst
-		new_test_gcre(60, 10, Some(5), |config| {
+		new_test_gcra(60, 10, Some(5), |config| {
 			assert_eq!(config.period, Duration::from_secs(60));
 			assert_eq!(config.quota, NonZeroU32::new(10).unwrap());
 			assert_eq!(config.burst, NonZeroU32::new(5).unwrap());
 		});
 
 		// without burst
-		new_test_gcre(60, 10, None, |config| {
+		new_test_gcra(60, 10, None, |config| {
 			assert_eq!(config.period, Duration::from_secs(60));
 			assert_eq!(config.quota, NonZeroU32::new(10).unwrap());
 			assert_eq!(config.burst, NonZeroU32::new(10).unwrap());
@@ -162,7 +161,7 @@ mod tests {
 
 	#[test]
 	fn simple_single_allow() {
-		new_test_gcre(60, 10, None, |config| {
+		new_test_gcra(60, 10, None, |config| {
 			let mut wrapper = TestWrapper::new(config);
 			let now = Utc::now();
 			let amount = NonZeroU32::new(1).unwrap();
@@ -180,7 +179,7 @@ mod tests {
 
 	#[test]
 	fn simple_single_last_fail() {
-		new_test_gcre(60, 10, None, |config| {
+		new_test_gcra(60, 10, None, |config| {
 			let mut wrapper = TestWrapper::new(config);
 			let now = Utc::now();
 			let amount = NonZeroU32::new(1).unwrap();
@@ -197,7 +196,7 @@ mod tests {
 
 	#[test]
 	fn refill_after_empty() {
-		new_test_gcre(10, 10, None, |config| {
+		new_test_gcra(10, 10, None, |config| {
 			let mut wrapper = TestWrapper::new(config);
 			let now = Utc::now();
 			let then = now + Duration::from_secs(1);
@@ -222,7 +221,7 @@ mod tests {
 
 	#[test]
 	fn complex_interaction_test() {
-		new_test_gcre(60, 10, Some(5), |config| {
+		new_test_gcra(60, 10, Some(5), |config| {
 			let mut wrapper = TestWrapper::new(config);
 			let now = Utc::now();
 			let middle = now + Duration::from_secs(30); // 30 seconds later
@@ -259,7 +258,7 @@ mod tests {
 
 	#[test]
 	fn large_amount_consume_and_small_refill() {
-		new_test_gcre(120, 10, None, |config| {
+		new_test_gcra(120, 10, None, |config| {
 			let mut wrapper = TestWrapper::new(config);
 			let now = Utc::now();
 			let a_min_later = now + Duration::from_secs(60); // 60 seconds later
@@ -286,7 +285,7 @@ mod tests {
 
 	#[test]
 	fn partial_refill() {
-		new_test_gcre(10, 10, None, |config| {
+		new_test_gcra(10, 10, None, |config| {
 			let mut wrapper = TestWrapper::new(config);
 			let now = Utc::now();
 			let then = now + Duration::from_secs(10);
@@ -312,7 +311,7 @@ mod tests {
 
 	#[test]
 	fn exact_quota() {
-		new_test_gcre(60, 10, None, |config| {
+		new_test_gcra(60, 10, None, |config| {
 			let mut wrapper = TestWrapper::new(config);
 			let now = Utc::now();
 			let amount = NonZeroU32::new(10).unwrap();
@@ -360,7 +359,7 @@ mod tests {
 
 	#[test]
 	fn invalid_remaining_quota_with_no_requests() {
-		new_test_gcre(60, 10, None, |config| {
+		new_test_gcra(60, 10, None, |config| {
 			let mut wrapper = TestWrapper::new(config);
 			let now = Utc::now();
 
@@ -375,7 +374,7 @@ mod tests {
 
 	#[test]
 	fn invalid_remaining_quota_after_exhaustion() {
-		new_test_gcre(60, 1, None, |config| {
+		new_test_gcra(60, 1, None, |config| {
 			let mut wrapper = TestWrapper::new(config);
 			let now = Utc::now();
 

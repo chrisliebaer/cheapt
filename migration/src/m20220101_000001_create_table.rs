@@ -1,7 +1,5 @@
 use sea_orm_migration::prelude::*;
 
-use crate::SchemaStatement::IndexStatement;
-
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
