@@ -96,6 +96,10 @@ impl FromStr for ChannelWhiteList {
 	type Err = Report;
 
 	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		if s.is_empty() {
+			return Ok(ChannelWhiteList(Vec::new()));
+		}
+
 		s.split(',')
 			.map(|s| s.parse().into_diagnostic().wrap_err("failed to parse channel id"))
 			.collect::<Result<Vec<_>, _>>()
