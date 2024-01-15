@@ -79,15 +79,14 @@ impl From<&poise::serenity_prelude::User> for UserContext {
 }
 
 pub async fn handle_completion(ctx: &poise::serenity_prelude::Context, app: &AppState, new_message: &Message) -> Result<()> {
-
 	// if whitelist is empty, assume user did not configure one
-	if !app.whitelist.is_empty() {
-		if !app.whitelist.contains(&new_message.channel_id) {
-			new_message.reply(ctx, "This channel is not whitelisted.").await
-					.into_diagnostic()
-					.wrap_err("failed to send whitelist message")?;
-			return Ok(());
-		}
+	if !app.whitelist.is_empty() && !app.whitelist.contains(&new_message.channel_id) {
+		new_message
+			.reply(ctx, "This channel is not whitelisted.")
+			.await
+			.into_diagnostic()
+			.wrap_err("failed to send whitelist message")?;
+		return Ok(());
 	}
 
 	if !check_rate_limit(new_message, app).await? {

@@ -4,8 +4,10 @@ mod gcra;
 mod invocation_builder;
 mod rate_limit_config;
 
-use std::str::FromStr;
-use std::time::Duration;
+use std::{
+	str::FromStr,
+	time::Duration,
+};
 
 use async_openai::{
 	config::OpenAIConfig,
@@ -25,6 +27,7 @@ use migration::{
 };
 use poise::{
 	serenity_prelude::{
+		ChannelId,
 		ClientBuilder,
 		CreateAllowedMentions,
 		FullEvent,
@@ -34,7 +37,6 @@ use poise::{
 	FrameworkError,
 	FrameworkOptions,
 };
-use poise::serenity_prelude::ChannelId;
 use sea_orm::{
 	ConnectOptions,
 	Database,
