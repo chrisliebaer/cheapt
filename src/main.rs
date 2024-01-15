@@ -4,7 +4,10 @@ mod gcra;
 mod invocation_builder;
 mod rate_limit_config;
 
-use std::time::Duration;
+use std::{
+	str::FromStr,
+	time::Duration,
+};
 
 use async_openai::{
 	config::OpenAIConfig,
@@ -24,6 +27,7 @@ use migration::{
 };
 use poise::{
 	serenity_prelude::{
+		ChannelId,
 		ClientBuilder,
 		CreateAllowedMentions,
 		FullEvent,
@@ -82,6 +86,26 @@ struct EnvConfig {
 
 	#[envconfig(from = "RATE_LIMIT_CONFIG", default = "rate_limits.toml")]
 	rate_limit_config: String,
+
+	#[envconfig(from = "WHITELIST_CHANNEL", default = "")]
+	whitelist_channel: ChannelWhiteList,
+}
+
+struct ChannelWhiteList(Vec<ChannelId>);
+impl FromStr for ChannelWhiteList {
+	type Err = Report;
+
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		if s.is_empty() {
+			return Ok(ChannelWhiteList(Vec::new()));
+		}
+
+		s.split(',')
+			.map(|s| s.parse().into_diagnostic().wrap_err("failed to parse channel id"))
+			.collect::<Result<Vec<_>, _>>()
+			.map(ChannelWhiteList)
+			.wrap_err("failed to parse channel whitelist")
+	}
 }
 
 struct AppState {
@@ -90,6 +114,7 @@ struct AppState {
 	db: DatabaseConnection,
 	path_rate_limits: Mutex<PathRateLimits>,
 	context_settings: InvocationContextSettings,
+	whitelist: Vec<ChannelId>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -200,6 +225,7 @@ async fn main() -> Result<()> {
 						reply_chain_window: Some(5),
 						reply_chain_max_token_count: Some(1000),
 					},
+					whitelist: env_config.whitelist_channel.0,
 				})
 			})
 		})
