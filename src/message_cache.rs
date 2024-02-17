@@ -40,7 +40,7 @@ impl<'a, C: ConnectionTrait> MessageCache<'a, C> {
 		}
 	}
 
-	pub async fn add(&self, message: &Message) -> Result<message_cache::Model> {
+	pub async fn _add(&self, message: &Message) -> Result<message_cache::Model> {
 		// ensure author is also present in database
 		let _ = user_from_db_or_create(self.db, &message.author).await?;
 
@@ -90,7 +90,7 @@ impl<'a, C: ConnectionTrait> MessageCache<'a, C> {
 	}
 
 	/// Fetches a message from the cache. If the message is not in the cache, it will be loaded from the Discord API.
-	pub async fn fetch(
+	pub async fn _fetch(
 		&self,
 		channel_id: ChannelId,
 		message_id: MessageId,
@@ -114,7 +114,7 @@ impl<'a, C: ConnectionTrait> MessageCache<'a, C> {
 					.await
 					.into_diagnostic()
 					.wrap_err("failed to fetch message from discord")?;
-				self.add(&discord_message).await?
+				self._add(&discord_message).await?
 			},
 		};
 

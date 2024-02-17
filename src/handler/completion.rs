@@ -340,7 +340,7 @@ async fn remove_opted_out_users(db: &DatabaseConnection, messages: &mut Vec<Cont
 	// fetch database objects to check for opt-out status
 	let mut opt_out_users = HashSet::new();
 	for author in authors {
-		let user = user_from_db_or_create(db, &author).await?;
+		let user = user_from_db_or_create(db, author).await?;
 
 		if user.opt_out_since.is_some() {
 			opt_out_users.insert(user.discord_user_id);
