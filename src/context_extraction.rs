@@ -89,6 +89,12 @@ impl InvocationContextSettings {
 						.into_diagnostic()
 						.wrap_err("failed to fetch reply chain window")?;
 
+					// filter out messages that are not from the same author as the replied message
+					let window = window
+						.into_iter()
+						.filter(|m| m.author.id == center.author.id)
+						.collect::<Vec<_>>();
+
 					// expand window around replied message by alternating between messages before and after the replied message
 					let expanding_window = {
 						let mut shrinking_window = Vec::<Message>::new();

@@ -21,6 +21,7 @@ impl MigrationTrait for Migration {
 					.col(ColumnDef::new(User::Uuid).uuid().not_null().unique_key())
 					.col(ColumnDef::new(User::DiscordUserId).big_unsigned().not_null().unique_key())
 					.col(ColumnDef::new(User::Username).text().not_null())
+					.col(ColumnDef::new(User::OptOutSince).timestamp().null())
 					.to_owned(),
 			)
 			.await?;
@@ -109,7 +110,12 @@ impl MigrationTrait for Migration {
 							.unique_key(),
 					)
 					.col(ColumnDef::new(Blacklist::Reason).text().not_null())
-					.col(ColumnDef::new(Blacklist::CreatedAt).timestamp().not_null())
+					.col(
+						ColumnDef::new(Blacklist::CreatedAt)
+							.timestamp()
+							.default(Expr::current_timestamp())
+							.not_null(),
+					)
 					.to_owned(),
 			)
 			.await?;
@@ -148,6 +154,9 @@ enum User {
 
 	/// Discord Username, not guaranteed to be unique, since users can change their name.
 	Username,
+
+	/// Timestamp when the user opted out. Can be null if the user never opted out.
+	OptOutSince,
 }
 
 /// Message cache.
@@ -200,7 +209,7 @@ enum RateLimit {
 enum Blacklist {
 	Table,
 
-	/// Discord ID for primary key.
+	/// Database ID for primary key.
 	Id,
 
 	/// Discord ID of the user.

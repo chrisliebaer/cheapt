@@ -13,6 +13,7 @@ pub struct Model {
 	pub discord_user_id: u64,
 	#[sea_orm(column_type = "Text")]
 	pub username: String,
+	pub opt_out_since: Option<DateTimeUtc>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
