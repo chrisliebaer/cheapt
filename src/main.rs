@@ -2,6 +2,7 @@ mod context_extraction;
 mod gcra;
 mod handler;
 mod invocation_builder;
+mod message_cache;
 mod rate_limit_config;
 
 use std::{
@@ -50,6 +51,7 @@ use sea_orm::{
 	ActiveValue::Set,
 	ColumnTrait,
 	ConnectOptions,
+	ConnectionTrait,
 	Database,
 	DatabaseConnection,
 	EntityTrait,
@@ -58,7 +60,6 @@ use sea_orm::{
 use tera::Tera;
 use tokio::sync::Mutex;
 use tracing::{
-	debug,
 	error,
 	info,
 	info_span,
@@ -75,6 +76,7 @@ use crate::{
 		completion::handle_completion,
 		opt_out,
 	},
+	message_cache::MessageCache,
 	rate_limit_config::{
 		PathRateLimits,
 		RateLimitConfig,
@@ -356,8 +358,14 @@ async fn discord_listener<'a>(ctx: &'a poise::serenity_prelude::Context, ev: &'a
 		FullEvent::MessageUpdate {
 			new: Some(new), ..
 		} => {
-			// TODO: invalidate moderation cache for message
-			debug!("message {} updated, invalidating cache", new.id);
+			let message_cache = MessageCache::new(&app.db);
+			message_cache.invalidate(&new.id).await?;
+		},
+		FullEvent::MessageDelete {
+			deleted_message_id, ..
+		} => {
+			let message_cache = MessageCache::new(&app.db);
+			message_cache.invalidate(deleted_message_id).await?;
 		},
 		_ => {},
 	}
@@ -378,7 +386,7 @@ pub async fn help(
 	Ok(())
 }
 
-pub async fn user_from_db_or_create(db: &DatabaseConnection, user: &User) -> Result<user::Model> {
+pub async fn user_from_db_or_create<C: ConnectionTrait>(db: &C, user: &User) -> Result<user::Model> {
 	let id = user.id.get();
 	let name = &user.name;
 

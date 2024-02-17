@@ -26,6 +26,7 @@ use sea_orm::{
 };
 
 use crate::{
+	message_cache::MessageCache,
 	user_from_db_or_create,
 	Context,
 };
@@ -154,6 +155,9 @@ pub async fn opt_out_dialogue(ctx: Context<'_>) -> Result<()> {
 			// user somehow managed to click on the disabled button, thanks discord
 			return Ok(());
 		};
+
+		let cache = MessageCache::new(&app.db);
+		cache.delete_from_user(ctx.author().id).await?;
 
 		db_user
 			.update(&app.db)
