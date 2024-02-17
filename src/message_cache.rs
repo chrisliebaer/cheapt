@@ -75,12 +75,8 @@ impl<'a, C: ConnectionTrait> MessageCache<'a, C> {
 	}
 
 	pub async fn delete_from_user(&self, user_id: UserId) -> Result<()> {
-		let entry = message_cache::ActiveModel {
-			discord_user_id: Set(user_id.get()),
-			..Default::default()
-		};
-
-		entity::prelude::MessageCache::delete(entry)
+		let _ = entity::prelude::MessageCache::delete_many()
+			.filter(message_cache::Column::DiscordUserId.eq(user_id.get()))
 			.exec(self.db)
 			.await
 			.into_diagnostic()

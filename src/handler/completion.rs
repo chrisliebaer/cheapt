@@ -352,7 +352,9 @@ async fn remove_opted_out_users(db: &DatabaseConnection, messages: &mut Vec<Cont
 		let msg: &Message = m.into();
 		let retain = !opt_out_users.contains(&msg.author.id.get());
 
-		trace!("Removing message {} from user {} due to opt-out", msg.id, msg.author.name);
+		if !retain {
+			trace!("Removing message {} from user {} due to opt-out", msg.id, msg.author.name);
+		}
 
 		retain
 	});
