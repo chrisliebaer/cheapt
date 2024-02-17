@@ -33,13 +33,13 @@ use crate::{
 #[derive(PartialEq)]
 enum OptOutState {
 	/// Indicates that user has not opted out.
-	OptedIn,
+	In,
 
 	/// Indicates that user has opted out and is allowed to opt back in.
-	OptedOut,
+	Out,
 
 	/// Indicates that user has opted out recently and is not allowed to opt back in.
-	OptedOutRecently,
+	OutRecently,
 }
 
 const OPT_OUT_TEXT: &str = r#"
@@ -88,21 +88,21 @@ pub async fn opt_out_dialogue(ctx: Context<'_>) -> Result<()> {
 	let state = calculate_state(lockout_duration, db_user);
 
 	let reply = match state {
-		OptOutState::OptedIn => create_dialogue(
+		OptOutState::In => create_dialogue(
 			OPT_OUT_TEXT,
 			CreateButton::new(format!("{id}:opt-out"))
 				.emoji(ReactionType::Unicode("🚫".to_string()))
 				.style(ButtonStyle::Danger)
 				.label("Yes, stop processing my messages!"),
 		),
-		OptOutState::OptedOut => create_dialogue(
+		OptOutState::Out => create_dialogue(
 			OPT_IN_AVAILABLE_TEXT,
 			CreateButton::new(format!("{id}:opt-in"))
 				.emoji(ReactionType::Unicode("✅".to_string()))
 				.style(ButtonStyle::Success)
 				.label("Yes, you can process my messages!"),
 		),
-		OptOutState::OptedOutRecently => create_dialogue(
+		OptOutState::OutRecently => create_dialogue(
 			OPT_IN_NOT_AVAILABLE_TEXT,
 			CreateButton::new(format!("{id}:noop"))
 				.emoji(ReactionType::Unicode("🔒".to_string()))
@@ -177,12 +177,12 @@ fn calculate_state(lockout_duration: &Duration, db_user: Model) -> OptOutState {
 		let duration = now - opt_out_since;
 		let duration = duration.to_std().expect("unable to convert chrono duration to std duration");
 		if &duration < lockout_duration {
-			OptOutState::OptedOutRecently
+			OptOutState::OutRecently
 		} else {
-			OptOutState::OptedOut
+			OptOutState::Out
 		}
 	} else {
-		OptOutState::OptedIn
+		OptOutState::In
 	}
 }
 
