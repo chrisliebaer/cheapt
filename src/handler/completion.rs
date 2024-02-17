@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{
+	HashMap,
+	HashSet,
+};
 
 use async_openai::types::{
 	ChatCompletionRequestMessage,
@@ -18,6 +21,7 @@ use poise::serenity_prelude::{
 	CreateMessage,
 	Message,
 };
+use sea_orm::DatabaseConnection;
 use tracing::{
 	info,
 	trace,
@@ -256,8 +260,12 @@ async fn generate_openai_response<'a>(
 		.join("\n");
 
 	// TODO: implement message cache to avoid fetching messages multiple times
-	let chat_history = context_settings.extract_context_from_message(ctx, message).await?;
+	// TODO: pass message cache as argument
+	let mut chat_history = context_settings.extract_context_from_message(ctx, message).await?;
 	dump_extracted_messages(&chat_history);
+
+	// remove all messages for users that opted out
+	remove_opted_out_users(&app.db, &mut chat_history).await?;
 
 	// unpack chat history into messages, we longer need inclusion reason
 	let chat_history = chat_history.iter().map(|m| m.into()).collect::<Vec<&Message>>();
@@ -314,6 +322,40 @@ async fn generate_openai_response<'a>(
 		.await
 		.into_diagnostic()
 		.wrap_err("failed to send reply message")?;
+
+	Ok(())
+}
+
+async fn remove_opted_out_users(db: &DatabaseConnection, messages: &mut Vec<ContextMessageVariant>) -> Result<()> {
+	// extract all user ids from messages
+	let authors = messages
+		.iter()
+		// convert into message and get	user id
+		.map(|m| {
+			let msg: &Message = m.into();
+			&msg.author
+		})
+		.collect::<HashSet<_>>();
+
+	// fetch database objects to check for opt-out status
+	let mut opt_out_users = HashSet::new();
+	for author in authors {
+		let user = user_from_db_or_create(db, &author).await?;
+
+		if user.opt_out_since.is_some() {
+			opt_out_users.insert(user.discord_user_id);
+			continue;
+		}
+	}
+
+	messages.retain(|m| {
+		let msg: &Message = m.into();
+		let retain = !opt_out_users.contains(&msg.author.id.get());
+
+		trace!("Removing message {} from user {} due to opt-out", msg.id, msg.author.name);
+
+		retain
+	});
 
 	Ok(())
 }

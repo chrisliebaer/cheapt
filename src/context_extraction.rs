@@ -38,7 +38,6 @@ pub struct InvocationContextSettings {
 
 impl InvocationContextSettings {
 	pub async fn extract_context_from_message(&self, ctx: &Context, message: &Message) -> Result<Vec<ContextMessageVariant>> {
-		// TODO: track which limits were exceeded
 		let mut limit_tracker = LimitTracker::new();
 		let mut messages = Vec::<ContextMessageVariant>::new();
 
@@ -156,6 +155,8 @@ impl InvocationContextSettings {
 			message.timestamp
 		});
 		messages.dedup_by_key(|m| m.id());
+
+		//
 
 		Ok(messages)
 	}

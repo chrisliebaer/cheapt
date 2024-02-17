@@ -26,6 +26,7 @@ use sea_orm::{
 };
 
 use crate::{
+	message_cache::MessageCache,
 	user_from_db_or_create,
 	Context,
 };
@@ -88,33 +89,21 @@ pub async fn opt_out_dialogue(ctx: Context<'_>) -> Result<()> {
 	let state = calculate_state(lockout_duration, db_user);
 
 	let reply = match state {
-<<<<<<< HEAD
 		OptOutState::In => create_dialogue(
-=======
-		OptOutState::OptedIn => create_dialogue(
->>>>>>> a706e07 (:sparkles: Implement Opt-out and user blacklisting)
 			OPT_OUT_TEXT,
 			CreateButton::new(format!("{id}:opt-out"))
 				.emoji(ReactionType::Unicode("🚫".to_string()))
 				.style(ButtonStyle::Danger)
 				.label("Yes, stop processing my messages!"),
 		),
-<<<<<<< HEAD
 		OptOutState::Out => create_dialogue(
-=======
-		OptOutState::OptedOut => create_dialogue(
->>>>>>> a706e07 (:sparkles: Implement Opt-out and user blacklisting)
 			OPT_IN_AVAILABLE_TEXT,
 			CreateButton::new(format!("{id}:opt-in"))
 				.emoji(ReactionType::Unicode("✅".to_string()))
 				.style(ButtonStyle::Success)
 				.label("Yes, you can process my messages!"),
 		),
-<<<<<<< HEAD
 		OptOutState::OutRecently => create_dialogue(
-=======
-		OptOutState::OptedOutRecently => create_dialogue(
->>>>>>> a706e07 (:sparkles: Implement Opt-out and user blacklisting)
 			OPT_IN_NOT_AVAILABLE_TEXT,
 			CreateButton::new(format!("{id}:noop"))
 				.emoji(ReactionType::Unicode("🔒".to_string()))
@@ -167,6 +156,9 @@ pub async fn opt_out_dialogue(ctx: Context<'_>) -> Result<()> {
 			return Ok(());
 		};
 
+		let cache = MessageCache::new(&app.db);
+		cache.delete_from_user(ctx.author().id).await?;
+
 		db_user
 			.update(&app.db)
 			.await
@@ -189,21 +181,12 @@ fn calculate_state(lockout_duration: &Duration, db_user: Model) -> OptOutState {
 		let duration = now - opt_out_since;
 		let duration = duration.to_std().expect("unable to convert chrono duration to std duration");
 		if &duration < lockout_duration {
-<<<<<<< HEAD
 			OptOutState::OutRecently
 		} else {
 			OptOutState::Out
 		}
 	} else {
 		OptOutState::In
-=======
-			OptOutState::OptedOutRecently
-		} else {
-			OptOutState::OptedOut
-		}
-	} else {
-		OptOutState::OptedIn
->>>>>>> a706e07 (:sparkles: Implement Opt-out and user blacklisting)
 	}
 }
 
