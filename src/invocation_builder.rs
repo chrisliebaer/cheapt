@@ -30,13 +30,13 @@ lazy_static! {
 #[derive(Debug)]
 pub struct InvocationContextLore {
 	/// Lore about the current server. This provides additional information about the server which can not be immediately
-	/// inferred from the messages themself. Will be `None` if no lore has been provided or invocation was outside of a
+	/// inferred from the messages themselves. Will be `None` if no lore has been provided or invocation was outside a
 	/// server.
 	pub guild_lore: Option<String>,
 
 	/// Lore about the current channel. The bot will be given the channel topic and name as context.
 	/// Many channels have poor names and topics, so this allows users to provide additional information about the
-	/// channel. Will be `None` if no lore has been provided or invocation was outside of a server.
+	/// channel. Will be `None` if no lore has been provided or invocation was outside a server.
 	pub channel_lore: Option<String>,
 
 	/// Lore about the current user.
@@ -52,7 +52,7 @@ pub struct InvocationBuilder {
 	/// List of messages that will be included in the conversation. Implemented as a map to allow lookup of replies.
 	input_messages: Vec<Message>,
 
-	/// Mapping of user names to user ids. Used to convert user mentions in replies to user ids.
+	/// Mapping of usernames to user ids. Used to convert user mentions in replies to user ids.
 	user_cache: HashMap<String, UserId>,
 
 	/// Mapping of emotes that reply can use.
@@ -195,7 +195,7 @@ impl InvocationBuilder {
 			let id_str = caps.name("id").unwrap().as_str();
 			let id = id_str.parse::<u64>().ok().map(UserId::from);
 
-			// try to find user name in cache, if not found, use id with @ prefix
+			// try to find username in cache, if not found, use id with @ prefix
 			id.and_then(|id| {
 				self
 					.user_cache

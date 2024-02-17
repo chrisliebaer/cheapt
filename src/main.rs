@@ -1,10 +1,11 @@
-mod completion;
 mod context_extraction;
 mod gcra;
+mod handler;
 mod invocation_builder;
 mod rate_limit_config;
 
 use std::{
+	num::NonZeroU32,
 	str::FromStr,
 	time::Duration,
 };
@@ -13,6 +14,11 @@ use async_openai::{
 	config::OpenAIConfig,
 	Client,
 };
+use chrono::{
+	DateTime,
+	Utc,
+};
+use entity::user;
 use envconfig::Envconfig;
 use lazy_static::lazy_static;
 use miette::{
@@ -32,15 +38,22 @@ use poise::{
 		CreateAllowedMentions,
 		FullEvent,
 		GatewayIntents,
+		User,
 	},
 	Framework,
 	FrameworkError,
 	FrameworkOptions,
 };
+use rand::random;
 use sea_orm::{
+	ActiveModelTrait,
+	ActiveValue::Set,
+	ColumnTrait,
 	ConnectOptions,
 	Database,
 	DatabaseConnection,
+	EntityTrait,
+	QueryFilter,
 };
 use tera::Tera;
 use tokio::sync::Mutex;
@@ -54,8 +67,14 @@ use tracing::{
 };
 
 use crate::{
-	completion::handle_completion,
 	context_extraction::InvocationContextSettings,
+	gcra::GCRAConfig,
+	handler::{
+		admin,
+		admin::get_blacklist_for_user,
+		completion::handle_completion,
+		opt_out,
+	},
 	rate_limit_config::{
 		PathRateLimits,
 		RateLimitConfig,
@@ -87,6 +106,9 @@ struct EnvConfig {
 	#[envconfig(from = "RATE_LIMIT_CONFIG", default = "rate_limits.toml")]
 	rate_limit_config: String,
 
+	#[envconfig(from = "OPT_OUT_LOCKOUT", default = "30d")]
+	opt_out_lockout: ParsedDuration,
+
 	#[envconfig(from = "WHITELIST_CHANNEL", default = "")]
 	whitelist_channel: ChannelWhiteList,
 }
@@ -108,6 +130,19 @@ impl FromStr for ChannelWhiteList {
 	}
 }
 
+struct ParsedDuration(Duration);
+impl FromStr for ParsedDuration {
+	type Err = Report;
+
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		// we use humantime to parse duration
+		humantime::parse_duration(s)
+			.into_diagnostic()
+			.wrap_err("failed to parse duration")
+			.map(ParsedDuration)
+	}
+}
+
 struct AppState {
 	tera: Tera,
 	openai_client: Client<OpenAIConfig>,
@@ -115,7 +150,9 @@ struct AppState {
 	path_rate_limits: Mutex<PathRateLimits>,
 	context_settings: InvocationContextSettings,
 	whitelist: Vec<ChannelId>,
+	opt_out_lockout: Duration,
 }
+type Context<'a> = poise::Context<'a, AppState, Report>;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -169,8 +206,12 @@ async fn main() -> Result<()> {
 		rate_limit_config.into()
 	};
 
+	let mut commands = vec![help(), opt_out::opt_out_dialogue()];
+	admin::register_commands(&mut commands);
+
 	// setup discord client with serenity
 	let poise_options = FrameworkOptions {
+		commands,
 		pre_command: |ctx| {
 			Box::pin(async move {
 				let invocation = ctx.invocation_string();
@@ -226,11 +267,11 @@ async fn main() -> Result<()> {
 						reply_chain_max_token_count: Some(1000),
 					},
 					whitelist: env_config.whitelist_channel.0,
+					opt_out_lockout: env_config.opt_out_lockout.0,
 				})
 			})
 		})
 		.options(poise_options)
-		.initialize_owners(false)
 		.build();
 
 	ClientBuilder::new(
@@ -250,12 +291,36 @@ async fn main() -> Result<()> {
 	Ok(())
 }
 
+lazy_static! {
+	static ref GLOBAL_RATE_LIMIT: Mutex<(Option<DateTime<Utc>>, GCRAConfig)> = Mutex::new((
+		None,
+		GCRAConfig::new(Duration::from_secs(1), NonZeroU32::new(100).unwrap(), None)
+	));
+}
+
 async fn discord_listener<'a>(ctx: &'a poise::serenity_prelude::Context, ev: &'a FullEvent, app: &'a AppState) -> Result<()> {
 	match ev {
 		FullEvent::Message {
 			new_message,
 		} => {
+			// a large in-memory rate limit for all messages, to prevent overloading the bot
+			{
+				let mut global_rate_limit = GLOBAL_RATE_LIMIT.lock().await;
+				let (state, gcre) = &mut *global_rate_limit;
+				match gcre.check(Utc::now(), *state, NonZeroU32::new(1).unwrap()) {
+					Some(new_state) => {
+						*state = Some(new_state);
+					},
+					None => return Ok(()),
+				}
+			}
+
 			let span = info_span!("message", author = %new_message.author.name, content = %new_message.content);
+
+			// drop messages from blacklisted users
+			if get_blacklist_for_user(&app.db, new_message.author.id).await?.is_some() {
+				return Ok(());
+			}
 
 			let our_id = ctx.cache.current_user().id;
 
@@ -266,8 +331,6 @@ async fn discord_listener<'a>(ctx: &'a poise::serenity_prelude::Context, ev: &'a
 
 			// we only reply to message if user obviously wants us to
 			let concerned = {
-				// TODO: if user opted out, we instead send a message that we won't reply
-
 				let mentioned = new_message.mentions_user_id(our_id);
 				let in_dm = new_message.is_private();
 				let replied_to_us = new_message
@@ -300,6 +363,45 @@ async fn discord_listener<'a>(ctx: &'a poise::serenity_prelude::Context, ev: &'a
 	}
 
 	Ok(())
+}
+
+/// Provides help for the bot.
+#[poise::command(prefix_command, track_edits, owners_only)]
+pub async fn help(
+	ctx: Context<'_>,
+	#[description = "Specific command to show help about"] command: Option<String>,
+) -> Result<()> {
+	poise::builtins::help(ctx, command.as_deref(), Default::default())
+		.await
+		.into_diagnostic()
+		.wrap_err("failed to send help message")?;
+	Ok(())
+}
+
+pub async fn user_from_db_or_create(db: &DatabaseConnection, user: &User) -> Result<user::Model> {
+	let id = user.id.get();
+	let name = &user.name;
+
+	let user = entity::prelude::User::find()
+		.filter(user::Column::DiscordUserId.eq(id))
+		.one(db)
+		.await
+		.into_diagnostic()
+		.wrap_err("failed to check for user in database")?;
+
+	if let Some(user) = user {
+		Ok(user)
+	} else {
+		let uuid = uuid::Builder::from_random_bytes(random()).into_uuid();
+		let user = user::ActiveModel {
+			uuid: Set(Vec::from(uuid)),
+			discord_user_id: Set(id),
+			username: Set(name.to_owned()),
+			..Default::default()
+		};
+		let user = user.insert(db).await.into_diagnostic().wrap_err("failed to create user")?;
+		Ok(user)
+	}
 }
 
 #[cfg(test)]

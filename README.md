@@ -17,7 +17,6 @@ The bot is in a very early stage of development but already usable.
 - Message caching
 - Summarization for more context over multiple messages
 - Tenor GIF support
-- More permissions
 
 ## Environment Variables
 
@@ -29,6 +28,7 @@ The project requires the following environment variables:
 - `RATE_LIMIT_CONFIG`: The path to your rate limit configuration file. Defaults to `rate_limits.toml`.
 - `DATABASE_URL`: The URL to your database. For example `mysql://user:password@localhost/database`.
 - `WHITELIST_CHANNEL`: A comma separated list of channel IDs that the bot is allowed to respond in. If not set, the bot will respond in all channels.
+- `OPT_OUT_LOCKOUT`: The time in seconds a user is locked out from the bot after opting out. Defaults to `30d`. Can use any time format supported by the `humantime` crate.
 
 
 ## License

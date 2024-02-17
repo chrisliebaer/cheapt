@@ -22,10 +22,12 @@ use tracing::{
 	info,
 	trace,
 };
+use uuid::Uuid;
 
 use crate::{
 	context_extraction::ContextMessageVariant,
 	invocation_builder::InvocationBuilder,
+	user_from_db_or_create,
 	AppState,
 };
 
@@ -79,6 +81,16 @@ impl From<&poise::serenity_prelude::User> for UserContext {
 }
 
 pub async fn handle_completion(ctx: &poise::serenity_prelude::Context, app: &AppState, new_message: &Message) -> Result<()> {
+	let db_user = user_from_db_or_create(&app.db, &new_message.author).await?;
+
+	// if user opted out, we don't do anything, not even send a message, since that would be spammy
+	if db_user.opt_out_since.is_some() {
+		trace!("User opted out, not sending reply");
+		return Ok(());
+	}
+
+	let user_uuid = uuid::Uuid::from_slice(db_user.uuid.as_slice()).expect("malformed uuid");
+
 	// if whitelist is empty, assume user did not configure one
 	if !app.whitelist.is_empty() && !app.whitelist.contains(&new_message.channel_id) {
 		new_message
@@ -125,7 +137,7 @@ pub async fn handle_completion(ctx: &poise::serenity_prelude::Context, app: &App
 
 	let completion_request = tokio::time::timeout(
 		std::time::Duration::from_secs(60),
-		generate_openai_response(ctx, app, new_message),
+		generate_openai_response(ctx, app, new_message, &user_uuid),
 	);
 
 	// assuming typing notifications don't fail, we can just wait for the fork to finish and will keep sending typing
@@ -216,11 +228,12 @@ async fn create_tera_context<'a>(ctx: &'a poise::serenity_prelude::Context, mess
 /// Called in preparation of invoking OpenAI for response generation.
 /// This function will load the configuration for the current execution context and fetch required messages from
 /// Discord.
-/// This includes possible resolution of reply chains and potential follow up messages.
+/// This includes possible resolution of reply chains and potential follow-up messages.
 async fn generate_openai_response<'a>(
 	ctx: &'a poise::serenity_prelude::Context,
 	app: &'a AppState,
 	message: &'a Message,
+	uuid: &Uuid,
 ) -> Result<()> {
 	let tera = &app.tera;
 	let context_settings = &app.context_settings;
@@ -262,8 +275,9 @@ async fn generate_openai_response<'a>(
 	request_messages.append(&mut invocation_builder.build_request());
 	dump_request_messages(&request_messages);
 
-	// TODO: register userid in database and associate request with discord user for abuse handling
 	let request = CreateChatCompletionRequest {
+		// pass uuid as user id, so we can identify the user, if we need to, without leaking discord user id
+		user: Some(uuid.hyphenated().to_string()),
 		model: "gpt-3.5-turbo".into(),
 		messages: request_messages,
 		top_p: Some(0.8),
