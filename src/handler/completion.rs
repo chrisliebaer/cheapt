@@ -1,39 +1,17 @@
-use std::collections::{
-	HashMap,
-	HashSet,
-};
+use std::collections::{HashMap, HashSet};
 
 use async_openai::types::{
-	ChatCompletionRequestMessage,
-	ChatCompletionRequestSystemMessage,
-	ChatCompletionRequestUserMessageContent,
-	CreateChatCompletionRequest,
-	FinishReason,
+	ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage, ChatCompletionRequestUserMessageContent,
+	CreateChatCompletionRequest, FinishReason,
 };
-use miette::{
-	miette,
-	IntoDiagnostic,
-	Result,
-	WrapErr,
-};
-use poise::serenity_prelude::{
-	ChannelId,
-	CreateMessage,
-	Message,
-};
+use miette::{miette, IntoDiagnostic, Report, Result, WrapErr};
+use poise::serenity_prelude::{ChannelId, CreateMessage, Message};
+use poise::FrameworkContext;
 use sea_orm::DatabaseConnection;
-use tracing::{
-	info,
-	trace,
-};
+use tracing::{info, trace};
 use uuid::Uuid;
 
-use crate::{
-	context_extraction::ContextMessageVariant,
-	invocation_builder::InvocationBuilder,
-	user_from_db_or_create,
-	AppState,
-};
+use crate::{context_extraction::ContextMessageVariant, invocation_builder::InvocationBuilder, user_from_db_or_create, AppState};
 
 #[derive(serde::Serialize)]
 struct GuildContext {
@@ -84,7 +62,12 @@ impl From<&poise::serenity_prelude::User> for UserContext {
 	}
 }
 
-pub async fn handle_completion(ctx: &poise::serenity_prelude::Context, app: &AppState, new_message: &Message) -> Result<()> {
+pub async fn handle_completion(
+	ctx: &poise::serenity_prelude::Context,
+	framework: FrameworkContext<'_, AppState, Report>,
+	app: &AppState,
+	new_message: &Message,
+) -> Result<()> {
 	let db_user = user_from_db_or_create(&app.db, &new_message.author).await?;
 
 	// if user opted out, we don't do anything, not even send a message, since that would be spammy
@@ -105,14 +88,15 @@ pub async fn handle_completion(ctx: &poise::serenity_prelude::Context, app: &App
 		return Ok(());
 	}
 
-	if !check_rate_limit(new_message, app).await? {
+	// bot owner can always use the bot
+	let is_owner = framework.options().owners.contains(&new_message.author.id);
+
+	// note order, as this ensures we still hit database, even if user is owner
+	if !check_rate_limit(new_message, app).await? && !is_owner {
 		// prevent user from spamming us with timeout
 		let error_report_future = tokio::time::timeout(std::time::Duration::from_secs(10), async {
 			let rate_limited_message = new_message
-				.reply(
-					ctx,
-					"You are sending too many messages, please wait a bit before sending more.",
-				)
+				.reply(ctx, "I'm currently receiving too many requests, please try again later.")
 				.await
 				.into_diagnostic()
 				.wrap_err("failed to send rate limit message")?;
