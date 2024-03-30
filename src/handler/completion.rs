@@ -1,17 +1,43 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{
+	HashMap,
+	HashSet,
+};
 
 use async_openai::types::{
-	ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage, ChatCompletionRequestUserMessageContent,
-	CreateChatCompletionRequest, FinishReason,
+	ChatCompletionRequestMessage,
+	ChatCompletionRequestSystemMessage,
+	ChatCompletionRequestUserMessageContent,
+	CreateChatCompletionRequest,
+	FinishReason,
 };
-use miette::{miette, IntoDiagnostic, Report, Result, WrapErr};
-use poise::serenity_prelude::{ChannelId, CreateMessage, Message};
-use poise::FrameworkContext;
+use miette::{
+	miette,
+	IntoDiagnostic,
+	Report,
+	Result,
+	WrapErr,
+};
+use poise::{
+	serenity_prelude::{
+		ChannelId,
+		CreateMessage,
+		Message,
+	},
+	FrameworkContext,
+};
 use sea_orm::DatabaseConnection;
-use tracing::{info, trace};
+use tracing::{
+	info,
+	trace,
+};
 use uuid::Uuid;
 
-use crate::{context_extraction::ContextMessageVariant, invocation_builder::InvocationBuilder, user_from_db_or_create, AppState};
+use crate::{
+	context_extraction::ContextMessageVariant,
+	invocation_builder::InvocationBuilder,
+	user_from_db_or_create,
+	AppState,
+};
 
 #[derive(serde::Serialize)]
 struct GuildContext {

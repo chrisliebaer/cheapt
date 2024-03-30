@@ -5,34 +5,83 @@ mod invocation_builder;
 mod message_cache;
 mod rate_limit_config;
 
-use std::{num::NonZeroU32, str::FromStr, time::Duration};
+use std::{
+	num::NonZeroU32,
+	str::FromStr,
+	time::Duration,
+};
 
-use async_openai::{config::OpenAIConfig, Client};
-use chrono::{DateTime, Utc};
+use async_openai::{
+	config::OpenAIConfig,
+	Client,
+};
+use chrono::{
+	DateTime,
+	Utc,
+};
 use entity::user;
 use envconfig::Envconfig;
 use lazy_static::lazy_static;
-use miette::{IntoDiagnostic, Report, Result, WrapErr};
-use migration::{Migrator, MigratorTrait};
+use miette::{
+	IntoDiagnostic,
+	Report,
+	Result,
+	WrapErr,
+};
+use migration::{
+	Migrator,
+	MigratorTrait,
+};
 use poise::{
-	serenity_prelude::{ChannelId, ClientBuilder, CreateAllowedMentions, FullEvent, GatewayIntents, User},
-	Framework, FrameworkContext, FrameworkError, FrameworkOptions,
+	serenity_prelude::{
+		ChannelId,
+		ClientBuilder,
+		CreateAllowedMentions,
+		FullEvent,
+		GatewayIntents,
+		User,
+	},
+	Framework,
+	FrameworkContext,
+	FrameworkError,
+	FrameworkOptions,
 };
 use rand::random;
 use sea_orm::{
-	ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectOptions, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
+	ActiveModelTrait,
+	ActiveValue::Set,
+	ColumnTrait,
+	ConnectOptions,
+	ConnectionTrait,
+	Database,
+	DatabaseConnection,
+	EntityTrait,
 	QueryFilter,
 };
 use tera::Tera;
 use tokio::sync::Mutex;
-use tracing::{error, info, info_span, trace, Instrument};
+use tracing::{
+	error,
+	info,
+	info_span,
+	trace,
+	Instrument,
+};
 
 use crate::{
 	context_extraction::InvocationContextSettings,
 	gcra::GCRAConfig,
-	handler::{admin, admin::get_blacklist_for_user, completion::handle_completion, opt_out},
+	handler::{
+		admin,
+		admin::get_blacklist_for_user,
+		completion::handle_completion,
+		opt_out,
+	},
 	message_cache::MessageCache,
-	rate_limit_config::{PathRateLimits, RateLimitConfig},
+	rate_limit_config::{
+		PathRateLimits,
+		RateLimitConfig,
+	},
 };
 
 lazy_static! {
@@ -175,8 +224,12 @@ async fn main() -> Result<()> {
 		on_error: |error: FrameworkError<'_, AppState, Report>| {
 			Box::pin(async move {
 				let err = match &error {
-					FrameworkError::Setup { error, .. } => Some(error),
-					FrameworkError::EventHandler { error, .. } => Some(error),
+					FrameworkError::Setup {
+						error, ..
+					} => Some(error),
+					FrameworkError::EventHandler {
+						error, ..
+					} => Some(error),
 					_ => None,
 				};
 
@@ -255,7 +308,9 @@ async fn discord_listener<'a>(
 	app: &'a AppState,
 ) -> Result<()> {
 	match ev {
-		FullEvent::Message { new_message } => {
+		FullEvent::Message {
+			new_message,
+		} => {
 			// a large in-memory rate limit for all messages, to prevent overloading the bot
 			{
 				let mut global_rate_limit = GLOBAL_RATE_LIMIT.lock().await;
@@ -306,11 +361,15 @@ async fn discord_listener<'a>(
 					.wrap_err("failed to send error message")?;
 			}
 		},
-		FullEvent::MessageUpdate { new: Some(new), .. } => {
+		FullEvent::MessageUpdate {
+			new: Some(new), ..
+		} => {
 			let message_cache = MessageCache::new(&app.db);
 			message_cache.invalidate(&new.id).await?;
 		},
-		FullEvent::MessageDelete { deleted_message_id, .. } => {
+		FullEvent::MessageDelete {
+			deleted_message_id, ..
+		} => {
 			let message_cache = MessageCache::new(&app.db);
 			message_cache.invalidate(deleted_message_id).await?;
 		},
