@@ -42,6 +42,7 @@ use poise::{
 		User,
 	},
 	Framework,
+	FrameworkContext,
 	FrameworkError,
 	FrameworkOptions,
 };
@@ -249,7 +250,7 @@ async fn main() -> Result<()> {
 		allowed_mentions: Some(CreateAllowedMentions::new().empty_roles().empty_users().replied_user(true)),
 		manual_cooldowns: true,
 		skip_checks_for_owners: false,
-		event_handler: |ctx, ev, _framework, app| Box::pin(discord_listener(ctx, ev, app)),
+		event_handler: |ctx, ev, framework, app| Box::pin(discord_listener(ctx, framework, ev, app)),
 		..Default::default()
 	};
 
@@ -300,7 +301,12 @@ lazy_static! {
 	));
 }
 
-async fn discord_listener<'a>(ctx: &'a poise::serenity_prelude::Context, ev: &'a FullEvent, app: &'a AppState) -> Result<()> {
+async fn discord_listener<'a>(
+	ctx: &'a poise::serenity_prelude::Context,
+	framework: FrameworkContext<'_, AppState, Report>,
+	ev: &'a FullEvent,
+	app: &'a AppState,
+) -> Result<()> {
 	match ev {
 		FullEvent::Message {
 			new_message,
@@ -347,7 +353,7 @@ async fn discord_listener<'a>(ctx: &'a poise::serenity_prelude::Context, ev: &'a
 				return Ok(());
 			}
 
-			if let Err(e) = handle_completion(ctx, app, new_message).instrument(span).await {
+			if let Err(e) = handle_completion(ctx, framework, app, new_message).instrument(span).await {
 				new_message
 					.reply_ping(ctx, format!("Error: {}", e))
 					.await
