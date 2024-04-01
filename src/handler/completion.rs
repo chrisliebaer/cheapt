@@ -3,13 +3,7 @@ use std::collections::{
 	HashSet,
 };
 
-use async_openai::types::{
-	ChatCompletionRequestMessage,
-	ChatCompletionRequestSystemMessage,
-	ChatCompletionRequestUserMessageContent,
-	CreateChatCompletionRequest,
-	FinishReason,
-};
+use async_openai::types::{ChatCompletionFunctionsArgs, ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage, ChatCompletionRequestUserMessageContent, ChatCompletionTool, ChatCompletionToolArgs, ChatCompletionToolType, CreateChatCompletionRequest, CreateChatCompletionRequestArgs, FinishReason, FunctionObjectArgs};
 use miette::{
 	miette,
 	IntoDiagnostic,
@@ -25,6 +19,7 @@ use poise::{
 	},
 	FrameworkContext,
 };
+use poise::serenity_prelude::json::json;
 use sea_orm::DatabaseConnection;
 use tracing::{
 	info,
@@ -293,16 +288,74 @@ async fn generate_openai_response<'a>(
 	request_messages.append(&mut invocation_builder.build_request());
 	dump_request_messages(&request_messages);
 
-	let request = CreateChatCompletionRequest {
-		// pass uuid as user id, so we can identify the user, if we need to, without leaking discord user id
-		user: Some(uuid.hyphenated().to_string()),
-		model: "gpt-3.5-turbo".into(),
-		messages: request_messages,
-		top_p: Some(0.8),
-		temperature: Some(1.5),
-		max_tokens: Some(context_settings.max_token_count as u16),
-		..Default::default()
-	};
+
+	let request = CreateChatCompletionRequestArgs::default()
+			.user(uuid.hyphenated().to_string())
+			.model("gpt-3.5-turbo")
+			.messages(request_messages)
+			.top_p(0.8)
+			.temperature(1.5)
+			.max_tokens(context_settings.max_token_count as u16)
+			.tools(vec![ChatCompletionToolArgs::default()
+					.function(FunctionObjectArgs::default()
+							.name("read_url")
+							.description("Delegates request to a specialized agent. The agent will also answer the user's question. So provide a detailed summary of the request you received.")
+							.parameters(json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL to read the content from",
+                    },
+                    "instruction": {
+												"type": "string",
+												"description": "Human readable instruction for the agent. As well as the summary of the request YOU received.",
+										},
+										"lang": {
+												"type": "string",
+												"description": "Language used by user.",
+										},
+                },
+                "required": ["url", "instruction", "lang"],
+            }))
+							.build()
+							.unwrap()
+					)
+					.build()
+					.unwrap(),
+				ChatCompletionToolArgs::default()
+						.function(FunctionObjectArgs::default()
+								.name("web_search")
+								.description("Delegates request to a specialized agent. The agent will also answer the user's question. So provide a detailed summary of the request you received.")
+								.parameters(json!({
+								"type": "object",
+								"properties": {
+										"query": {
+												"type": "string",
+												"description": "The query to search for",
+										},
+										"instruction": {
+												"type": "string",
+												"description": "Human readable instruction for the agent. As well as the summary of the request YOU received.",
+										},
+										"lang": {
+												"type": "string",
+												"description": "Language used by user.",
+										},
+								},
+								"required": ["query", "instruction", "lang"],
+						}))
+								.build()
+								.unwrap()
+						)
+						.build()
+						.unwrap()
+			]
+			)
+			.build()
+			.into_diagnostic()
+			.wrap_err("failed to build completion request")?;
+
 
 	let response = openai_client
 		.chat()
@@ -316,6 +369,13 @@ async fn generate_openai_response<'a>(
 
 	if choice.finish_reason == Some(FinishReason::ContentFilter) {
 		Err(miette!("OpenAI response was filtered"))?;
+	}
+
+	if let Some(calls) = &choice.message.tool_calls {
+		for call in calls {
+			let dbg_call = format!("{:?}({:?})", call.function.name, call.function.arguments);
+			info!("Tool call: {}", dbg_call);
+		}
 	}
 
 	let content = choice
