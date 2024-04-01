@@ -3,13 +3,7 @@ use std::collections::{
 	HashSet,
 };
 
-use async_openai::types::{
-	ChatCompletionRequestMessage,
-	ChatCompletionRequestSystemMessage,
-	ChatCompletionRequestUserMessageContent,
-	CreateChatCompletionRequest,
-	FinishReason,
-};
+use async_openai::types::{ChatCompletionFunctionsArgs, ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage, ChatCompletionRequestUserMessageContent, ChatCompletionTool, ChatCompletionToolType, CreateChatCompletionRequest, CreateChatCompletionRequestArgs, FinishReason};
 use miette::{
 	miette,
 	IntoDiagnostic,
@@ -25,6 +19,7 @@ use poise::{
 	},
 	FrameworkContext,
 };
+use poise::serenity_prelude::json::json;
 use sea_orm::DatabaseConnection;
 use tracing::{
 	info,
@@ -293,16 +288,45 @@ async fn generate_openai_response<'a>(
 	request_messages.append(&mut invocation_builder.build_request());
 	dump_request_messages(&request_messages);
 
-	let request = CreateChatCompletionRequest {
-		// pass uuid as user id, so we can identify the user, if we need to, without leaking discord user id
-		user: Some(uuid.hyphenated().to_string()),
-		model: "gpt-3.5-turbo".into(),
-		messages: request_messages,
-		top_p: Some(0.8),
-		temperature: Some(1.5),
-		max_tokens: Some(context_settings.max_token_count as u16),
-		..Default::default()
-	};
+	let functions = vec![ChatCompletionFunctionsArgs::default()
+			.name("read_url")
+			.description("Delegates current")
+			.parameters(
+				json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "url",
+                        "description": "The URL to read the content from",
+                    },
+                    "instruction": {
+												"type": "string",
+												"description": "Human readable instruction for the agent.",
+										},
+										"summary": {
+												"type": "string",
+												"description": "Summary of the request YOU received. Required for the agent to understand the context.",
+										}
+                },
+                "required": ["url", "instruction", "summary"],
+            })
+			)
+			.build()
+			.into_diagnostic()
+			.wrap_err("failed to build function")?];
+
+	let request = CreateChatCompletionRequestArgs::default()
+			.user(uuid.hyphenated().to_string())
+			.model("gpt-3.5-turbo")
+			.messages(request_messages)
+			.top_p(0.8)
+			.temperature(1.5)
+			.max_tokens(context_settings.max_token_count as u16)
+			.functions(functions)
+			.build()
+			.into_diagnostic()
+			.wrap_err("failed to build completion request")?;
+
 
 	let response = openai_client
 		.chat()
