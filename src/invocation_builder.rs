@@ -27,6 +27,7 @@ lazy_static! {
 /// This struct contains additional user provided context for the current context.
 /// This allows server admins and users to provide additional information about their servers, the channel and the
 /// expected output and quality of the response.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct InvocationContextLore {
 	/// Lore about the current server. This provides additional information about the server which can not be immediately
@@ -170,7 +171,7 @@ impl InvocationBuilder {
 		};
 
 		vec.push(header.into());
-		vec.push(main.into());
+		vec.push(main);
 
 		// message successfully processed, keep track of it's position
 		message_lookup.insert(message.id, *message_counter);

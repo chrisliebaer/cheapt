@@ -345,7 +345,7 @@ async fn discord_listener<'a>(
 			// we only reply to message if user obviously wants us to
 			let concerned = {
 				let mentioned = new_message.mentions_user_id(our_id);
-				let in_dm = new_message.is_private();
+				let in_dm = new_message.guild_id.is_none();
 				let replied_to_us = new_message
 					.referenced_message
 					.as_ref()
