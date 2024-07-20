@@ -296,11 +296,11 @@ async fn generate_openai_response<'a>(
 	let request = CreateChatCompletionRequest {
 		// pass uuid as user id, so we can identify the user, if we need to, without leaking discord user id
 		user: Some(uuid.hyphenated().to_string()),
-		model: "gpt-3.5-turbo".into(),
+		model: app.model.clone(),
 		messages: request_messages,
 		top_p: Some(0.8),
 		temperature: Some(1.5),
-		max_tokens: Some(context_settings.max_token_count as u16),
+		max_tokens: Some(context_settings.max_token_count as u32),
 		..Default::default()
 	};
 

@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use async_openai::types::{
+	ChatCompletionRequestAssistantMessage,
 	ChatCompletionRequestMessage,
 	ChatCompletionRequestSystemMessage,
 	ChatCompletionRequestUserMessage,
 	ChatCompletionRequestUserMessageContent,
-	Role,
 };
 use lazy_static::lazy_static;
 use poise::serenity_prelude::{
@@ -27,6 +27,7 @@ lazy_static! {
 /// This struct contains additional user provided context for the current context.
 /// This allows server admins and users to provide additional information about their servers, the channel and the
 /// expected output and quality of the response.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct InvocationContextLore {
 	/// Lore about the current server. This provides additional information about the server which can not be immediately
@@ -142,7 +143,6 @@ impl InvocationBuilder {
 
 		let header = ChatCompletionRequestSystemMessage {
 			content: facts.join(", "),
-			role: Role::System,
 			..Default::default()
 		};
 
@@ -157,20 +157,21 @@ impl InvocationBuilder {
 		author.truncate(64);
 		let author = author;
 
-		let main = ChatCompletionRequestUserMessage {
-			content: ChatCompletionRequestUserMessageContent::Text(content),
-			name: match is_own_message {
-				true => Some("Assistant".to_string()),
-				false => Some(author),
-			},
-			role: match is_own_message {
-				true => Role::Assistant,
-				false => Role::User,
-			},
+		let main = if is_own_message {
+			ChatCompletionRequestMessage::Assistant(ChatCompletionRequestAssistantMessage {
+				name: Some("Assistant".to_string()),
+				content: Some(content),
+				..Default::default()
+			})
+		} else {
+			ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
+				name: Some(author),
+				content: ChatCompletionRequestUserMessageContent::Text(content),
+			})
 		};
 
 		vec.push(header.into());
-		vec.push(main.into());
+		vec.push(main);
 
 		// message successfully processed, keep track of it's position
 		message_lookup.insert(message.id, *message_counter);
