@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use async_openai::types::{
+	ChatCompletionRequestAssistantMessage,
 	ChatCompletionRequestMessage,
 	ChatCompletionRequestSystemMessage,
 	ChatCompletionRequestUserMessage,
 	ChatCompletionRequestUserMessageContent,
-	Role,
 };
 use lazy_static::lazy_static;
 use poise::serenity_prelude::{
@@ -142,7 +142,6 @@ impl InvocationBuilder {
 
 		let header = ChatCompletionRequestSystemMessage {
 			content: facts.join(", "),
-			role: Role::System,
 			..Default::default()
 		};
 
@@ -157,16 +156,17 @@ impl InvocationBuilder {
 		author.truncate(64);
 		let author = author;
 
-		let main = ChatCompletionRequestUserMessage {
-			content: ChatCompletionRequestUserMessageContent::Text(content),
-			name: match is_own_message {
-				true => Some("Assistant".to_string()),
-				false => Some(author),
-			},
-			role: match is_own_message {
-				true => Role::Assistant,
-				false => Role::User,
-			},
+		let main = if is_own_message {
+			ChatCompletionRequestMessage::Assistant(ChatCompletionRequestAssistantMessage {
+				name: Some("Assistant".to_string()),
+				content: Some(content),
+				..Default::default()
+			})
+		} else {
+			ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
+				name: Some(author),
+				content: ChatCompletionRequestUserMessageContent::Text(content),
+			})
 		};
 
 		vec.push(header.into());

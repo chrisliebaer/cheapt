@@ -97,6 +97,9 @@ struct EnvConfig {
 	#[envconfig(from = "OPENAI_TOKEN")]
 	openai_token: String,
 
+	#[envconfig(from = "MODEL")]
+	model: String,
+
 	#[envconfig(from = "DISCORD_TOKEN")]
 	discord_token: String,
 
@@ -149,6 +152,7 @@ impl FromStr for ParsedDuration {
 struct AppState {
 	tera: Tera,
 	openai_client: Client<OpenAIConfig>,
+	model: String,
 	db: DatabaseConnection,
 	path_rate_limits: Mutex<PathRateLimits>,
 	context_settings: InvocationContextSettings,
@@ -259,6 +263,7 @@ async fn main() -> Result<()> {
 			Box::pin(async move {
 				Ok(AppState {
 					tera,
+					model: env_config.model,
 					openai_client,
 					db,
 					path_rate_limits: Mutex::new(path_rate_limits),
