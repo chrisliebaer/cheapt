@@ -1,0 +1,34 @@
+name: Sparkle Checker
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+
+jobs:
+  check_sparkles:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Check pull request title and description
+        run: |
+          PR_TITLE=$(jq -r .pull_request.title "$GITHUB_EVENT_PATH")
+          PR_BODY=$(jq -r .pull_request.body "$GITHUB_EVENT_PATH")
+
+          if [[ ! ($PR_TITLE =~ :sparkles: && ! $PR_BODY =~ :sparkles: && (! $PR_TITLE =~ :sparkle:.*:sparkle: || $PR_TITLE =~ ^:sparkle:.*:sparkle:$)) && ! ($PR_BODY =~ :sparkles: && ! $PR_TITLE =~ :sparkles: && ! $PR_BODY =~ :sparkle:.*:sparkle:) ]]; then
+            echo "Pull request is missing or has multiple sparkle emojis. Closing the pull request..."
+            gh pr close ${{ github.event.pull_request.number }}
+          fi
+
+      - name: Check commit messages
+        run: |
+          COMMIT_MESSAGES=$(git log --format=%B origin/main..HEAD)
+
+          if [[ ! $COMMIT_MESSAGES =~ :[^\s]*: ]]; then
+            echo "One or more commits are missing an emoji. Closing the pull request..."
+            gh pr close ${{ github.event.pull_request.number }}
+          fi
