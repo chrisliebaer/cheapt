@@ -102,10 +102,10 @@ pub async fn handle_completion(
 		return Ok(());
 	}
 
-	let user_uuid = uuid::Uuid::from_slice(db_user.uuid.as_slice()).expect("malformed uuid");
+	let user_uuid = Uuid::from_slice(db_user.uuid.as_slice()).expect("malformed uuid");
 
-	// if whitelist is empty, assume user did not configure one
-	if !app.whitelist.is_empty() && !app.whitelist.contains(&new_message.channel_id) {
+	// check if channel is whitelisted
+	if !app.whitelist.contains(new_message.channel_id, &ctx).await? {
 		new_message
 			.reply(ctx, "This channel is not whitelisted.")
 			.await
