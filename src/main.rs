@@ -6,6 +6,7 @@ mod message_cache;
 mod rate_limit_config;
 
 use std::{
+	collections::HashSet,
 	num::NonZeroU32,
 	str::FromStr,
 	time::Duration,
@@ -34,6 +35,7 @@ use migration::{
 };
 use poise::{
 	serenity_prelude::{
+		CacheHttp,
 		ChannelId,
 		ClientBuilder,
 		CreateAllowedMentions,
@@ -115,25 +117,8 @@ struct EnvConfig {
 	#[envconfig(from = "OPT_OUT_LOCKOUT", default = "30d")]
 	opt_out_lockout: ParsedDuration,
 
-	#[envconfig(from = "WHITELIST_CHANNEL", default = "")]
-	whitelist_channel: ChannelWhiteList,
-}
-
-struct ChannelWhiteList(Vec<ChannelId>);
-impl FromStr for ChannelWhiteList {
-	type Err = Report;
-
-	fn from_str(s: &str) -> Result<Self, Self::Err> {
-		if s.is_empty() {
-			return Ok(ChannelWhiteList(Vec::new()));
-		}
-
-		s.split(',')
-			.map(|s| s.parse().into_diagnostic().wrap_err("failed to parse channel id"))
-			.collect::<Result<Vec<_>, _>>()
-			.map(ChannelWhiteList)
-			.wrap_err("failed to parse channel whitelist")
-	}
+	#[envconfig(from = "WHITELIST", default = "")]
+	whitelist: Whitelist,
 }
 
 struct ParsedDuration(Duration);
@@ -149,6 +134,79 @@ impl FromStr for ParsedDuration {
 	}
 }
 
+/// A whitelist of Discord snowflake IDs.
+///
+/// Ids can be for channels, guilds or categories.
+struct Whitelist {
+	ids: HashSet<u64>,
+}
+impl Whitelist {
+	/// Checks recursively if the given channel id is in the whitelist.
+	///
+	/// This will check the channel itself and all parent categories up to and including the guild.
+	pub async fn contains(&self, channel_id: ChannelId, http: &impl CacheHttp) -> Result<bool> {
+		// direct hit
+		if self.ids.contains(&channel_id.get()) {
+			return Ok(true);
+		}
+
+		// check if channel is thread and check parent
+		let channel = channel_id
+			.to_channel(http)
+			.await
+			.into_diagnostic()
+			.wrap_err("failed to get channel")?;
+
+		let channel = channel.guild();
+		let channel = match channel {
+			Some(channel) => channel,
+
+			// if channel is not in a guild, we can't check for parent categories
+			None => return Ok(false),
+		};
+
+		// walk up the parent relationship
+		let mut channel = channel;
+		while let Some(parent) = channel.parent_id {
+			if self.ids.contains(&parent.get()) {
+				return Ok(true);
+			}
+
+			let parent = parent
+				.to_channel(http)
+				.await
+				.into_diagnostic()
+				.wrap_err("failed to get parent channel")?;
+
+			// update channel to parent
+			channel = parent.guild().expect("parent is not a guild somehow");
+		}
+
+		// finally check the guild
+		if self.ids.contains(&channel.guild_id.get()) {
+			return Ok(true);
+		}
+
+		Ok(false)
+	}
+}
+
+impl FromStr for Whitelist {
+	type Err = Report;
+
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		let ids = s
+			.split(',')
+			.map(|s| s.parse().into_diagnostic().wrap_err("failed to parse channel id"))
+			.collect::<Result<HashSet<_>, _>>()
+			.wrap_err("failed to parse channel whitelist")?;
+
+		Ok(Whitelist {
+			ids,
+		})
+	}
+}
+
 struct AppState {
 	tera: Tera,
 	openai_client: Client<OpenAIConfig>,
@@ -156,7 +214,7 @@ struct AppState {
 	db: DatabaseConnection,
 	path_rate_limits: Mutex<PathRateLimits>,
 	context_settings: InvocationContextSettings,
-	whitelist: Vec<ChannelId>,
+	whitelist: Whitelist,
 	opt_out_lockout: Duration,
 }
 type Context<'a> = poise::Context<'a, AppState, Report>;
@@ -274,7 +332,7 @@ async fn main() -> Result<()> {
 						reply_chain_window: Some(5),
 						reply_chain_max_token_count: Some(1000),
 					},
-					whitelist: env_config.whitelist_channel.0,
+					whitelist: env_config.whitelist,
 					opt_out_lockout: env_config.opt_out_lockout.0,
 				})
 			})
@@ -359,6 +417,7 @@ async fn discord_listener<'a>(
 			}
 
 			if let Err(e) = handle_completion(ctx, framework, app, new_message).instrument(span).await {
+				error!("Error handling completion: {:?}", e);
 				new_message
 					.reply_ping(ctx, format!("Error: {}", e))
 					.await
