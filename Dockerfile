@@ -1,4 +1,4 @@
-# Extracts dependencies so we provid from layer caching
+# Extracts dependencies in separate layer to enable caching
 # https://www.lpalmieri.com/posts/fast-rust-docker-builds/
 FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR app
