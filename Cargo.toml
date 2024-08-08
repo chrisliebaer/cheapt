@@ -68,3 +68,7 @@ log = "0.4.20"
 [dev-dependencies]
 ctor = "0.2"
 sea-orm = { version = "0.12", features = ["sqlx-mysql", "runtime-tokio-rustls", "macros", "debug-print", "with-chrono", "with-uuid", "mock"] }
+
+# poise uses serenity 0.12.2, which is currently broken, we need to use 0.12.1 for now
+[patch.crates-io]
+serenity = { git = "https://github.com/serenity-rs/serenity", tag = "v0.12.1" }
