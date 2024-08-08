@@ -19,7 +19,7 @@ jobs:
           PR_TITLE=$(jq -r .pull_request.title "$GITHUB_EVENT_PATH")
           PR_BODY=$(jq -r .pull_request.body "$GITHUB_EVENT_PATH")
 
-          if [[ ! ($PR_TITLE =~ :sparkles: && ! $PR_BODY =~ :sparkles: && (! $PR_TITLE =~ :sparkle:.*:sparkle: || $PR_TITLE =~ ^:sparkle:.*:sparkle:$)) && ! ($PR_BODY =~ :sparkles: && ! $PR_TITLE =~ :sparkles: && ! $PR_BODY =~ :sparkle:.*:sparkle:) ]]; then
+          if [[ ! $PR_TITLE =~ ^:sparkle:.*:sparkle:$ && ! ($PR_TITLE =~ :sparkles: && ! $PR_BODY =~ :sparkles: || $PR_TITLE =~ :sparkle:.*:sparkle:) && ! ($PR_BODY =~ :sparkles: && ! $PR_TITLE =~ :sparkles: || $PR_BODY =~ :sparkle:.*:sparkle:) ]]; then
             echo "Pull request is missing or has multiple sparkle emojis. Closing the pull request..."
             gh pr close ${{ github.event.pull_request.number }}
           fi
