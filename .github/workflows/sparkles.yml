@@ -19,7 +19,7 @@ jobs:
           PR_TITLE=$(jq -r .pull_request.title "$GITHUB_EVENT_PATH")
           PR_BODY=$(jq -r .pull_request.body "$GITHUB_EVENT_PATH")
 
-          if [[ ! $PR_TITLE =~ ^:sparkles:.*:sparkles:$ && ! ($PR_TITLE =~ :sparkles: && ! $PR_BODY =~ :sparkles: || $PR_TITLE =~ :sparkles:.*:sparkles:) && ! ($PR_BODY =~ :sparkles: && ! $PR_TITLE =~ :sparkles: || $PR_BODY =~ :sparkles:.*:sparkles:)
+          if [[ ! $PR_TITLE =~ ^:sparkles:.*:sparkles:$ && ! ($PR_TITLE =~ :sparkles: && ! $PR_BODY =~ :sparkles: || $PR_TITLE =~ :sparkles:.*:sparkles:) && ! ($PR_BODY =~ :sparkles: && ! $PR_TITLE =~ :sparkles: || $PR_BODY =~ :sparkles:.*:sparkles:) \
           && ! $PR_TITLE =~ ^✨.*✨$ && ! ($PR_TITLE =~ ✨ && ! $PR_BODY =~ ✨ || $PR_TITLE =~ ✨.*✨) && ! ($PR_BODY =~ ✨ && ! $PR_TITLE =~ ✨ || $PR_BODY =~ ✨.*✨) ]]; then
             echo "✨ Pull request is missing or has multiple sparkle emojis. Closing the pull request... ✨"
             gh pr close ${{ github.event.pull_request.number }}
@@ -27,7 +27,7 @@ jobs:
 
       - name: Check commit messages
         run: |
-          COMMIT_MESSAGES=$(git log --format=%B origin/main..HEAD)
+          COMMIT_MESSAGES=$(git log --format=%B ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }})
 
           if [[ ! $COMMIT_MESSAGES =~ :[^\s]*: && ! $COMMIT_MESSAGES =~ \p{Emoji} ]]; then
             echo "One or more commits are missing an emoji. Closing the pull request..."
