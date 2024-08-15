@@ -28,6 +28,8 @@ jobs:
           fi
 
       - name: Check commit messages
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           COMMIT_MESSAGES=$(git log --format=%B ^origin/${{ github.event.pull_request.base.ref }} HEAD)
 
