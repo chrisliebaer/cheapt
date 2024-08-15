@@ -36,7 +36,7 @@ jobs:
           IFS=$'\n' read -ra COMMIT_ARRAY <<< "$COMMIT_MESSAGES"
           for COMMIT in "${COMMIT_ARRAY[@]}"; do
             if [[ ! $COMMIT =~ :\w*: && ! $COMMIT =~ \p{Emoji} ]]; then
-              echo "One or more coasfsmmits are missing an emoji. Closing the pull request..."
+              echo "\"$COMMIT\" is missing an emoji. Closing the pull request..."
               gh pr close ${{ github.event.pull_request.number }}
               break
             fi
