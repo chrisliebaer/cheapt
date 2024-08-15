@@ -33,11 +33,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          sudo apt-get install ripgrep
+
           COMMIT_MESSAGES=$(git log --format=%B ^origin/${{ github.event.pull_request.base.ref }} HEAD^2)
 
           IFS=$'\n' read -ra COMMIT_ARRAY <<< "$COMMIT_MESSAGES"
           for COMMIT in "${COMMIT_ARRAY[@]}"; do
-            if [[ ! $COMMIT =~ :\w*: && ! $COMMIT =~ \p{Emoji} ]]; then
+            if ! ( echo $COMMIT | rg '\p{Emoji}|:\w*:' ); then
               echo "\"$COMMIT\" is missing an emoji. Closing the pull request..."
               gh pr close ${{ github.event.pull_request.number }}
               break
