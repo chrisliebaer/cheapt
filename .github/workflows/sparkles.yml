@@ -33,7 +33,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          COMMIT_MESSAGES=$(git log --format=%B ^origin/${{ github.event.pull_request.base.ref }} HEAD)
+          COMMIT_MESSAGES=$(git log --format=%B ^origin/${{ github.event.pull_request.base.ref }} HEAD^2)
 
           IFS=$'\n' read -ra COMMIT_ARRAY <<< "$COMMIT_MESSAGES"
           for COMMIT in "${COMMIT_ARRAY[@]}"; do
