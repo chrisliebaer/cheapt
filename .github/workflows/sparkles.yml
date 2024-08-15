@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Check pull request title and description
         run: |
@@ -27,7 +29,7 @@ jobs:
 
       - name: Check commit messages
         run: |
-          COMMIT_MESSAGES=$(git log --format=%B ^${{ github.event.pull_request.base.ref }} HEAD)
+          COMMIT_MESSAGES=$(git log --format=%B ^origin/${{ github.event.pull_request.base.ref }} HEAD)
 
           IFS=$'\n' read -ra COMMIT_ARRAY <<< "$COMMIT_MESSAGES"
           for COMMIT in "${COMMIT_ARRAY[@]}"; do
