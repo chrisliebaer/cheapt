@@ -4,7 +4,7 @@ version = "Two"
 # general stuff
 hide_parse_errors = true # since we sometimes save files with syntax errors
 max_width = 130
-color = "always"
+color = "Always"
 edition = "2021"
 newline_style = "Unix"
 normalize_comments = true
