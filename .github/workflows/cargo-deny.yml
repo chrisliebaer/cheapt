@@ -10,4 +10,4 @@ on:
 
 jobs:
   cargo-deny:
-    uses: chrisliebaer/.github/.github/workflows/cargo-deny.yml@sync
+    uses: chrisliebaer/.github/.github/workflows/cargo-deny.yml@master
