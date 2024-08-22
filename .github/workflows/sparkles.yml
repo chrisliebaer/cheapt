@@ -1,0 +1,47 @@
+name: Sparkle Checker
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+
+jobs:
+  check_sparkles:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check pull request title and description
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_TITLE=$(jq -r .pull_request.title "$GITHUB_EVENT_PATH")
+          PR_BODY=$(jq -r .pull_request.body "$GITHUB_EVENT_PATH")
+
+          if [[ ! $PR_TITLE =~ ^:sparkles:.*:sparkles:$ && ! ($PR_TITLE =~ :sparkles: && ! $PR_BODY =~ :sparkles: || $PR_TITLE =~ :sparkles:.*:sparkles:) && ! ($PR_BODY =~ :sparkles: && ! $PR_TITLE =~ :sparkles: || $PR_BODY =~ :sparkles:.*:sparkles:) \
+          && ! $PR_TITLE =~ ^✨.*✨$ && ! ($PR_TITLE =~ ✨ && ! $PR_BODY =~ ✨ || $PR_TITLE =~ ✨.*✨) && ! ($PR_BODY =~ ✨ && ! $PR_TITLE =~ ✨ || $PR_BODY =~ ✨.*✨) ]]; then
+            echo "✨ Pull request is missing or has multiple sparkle emojis. Closing the pull request... ✨"
+            gh pr close ${{ github.event.pull_request.number }}
+          fi
+
+      - name: Check commit messages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo apt-get install ripgrep
+
+          COMMIT_MESSAGES=$(git log --format=%B ^origin/${{ github.event.pull_request.base.ref }} HEAD^2)
+
+          IFS=$'\n' read -ra COMMIT_ARRAY <<< "$COMMIT_MESSAGES"
+          for COMMIT in "${COMMIT_ARRAY[@]}"; do
+            if ! ( echo "$COMMIT" | rg '\p{Emoji}|:\w*:' ); then
+              echo "\"$COMMIT\" is missing an emoji. Closing the pull request..."
+              gh pr close ${{ github.event.pull_request.number }}
+              break
+            fi
+          done
