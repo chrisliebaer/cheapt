@@ -2,8 +2,10 @@ use std::collections::HashMap;
 
 use async_openai::types::{
 	ChatCompletionRequestAssistantMessage,
+	ChatCompletionRequestAssistantMessageContent,
 	ChatCompletionRequestMessage,
 	ChatCompletionRequestSystemMessage,
+	ChatCompletionRequestSystemMessageContent,
 	ChatCompletionRequestUserMessage,
 	ChatCompletionRequestUserMessageContent,
 };
@@ -142,7 +144,7 @@ impl InvocationBuilder {
 		}
 
 		let header = ChatCompletionRequestSystemMessage {
-			content: facts.join(", "),
+			content: ChatCompletionRequestSystemMessageContent::Text(facts.join(", ")),
 			..Default::default()
 		};
 
@@ -160,7 +162,7 @@ impl InvocationBuilder {
 		let main = if is_own_message {
 			ChatCompletionRequestMessage::Assistant(ChatCompletionRequestAssistantMessage {
 				name: Some("Assistant".to_string()),
-				content: Some(content),
+				content: Some(ChatCompletionRequestAssistantMessageContent::Text(content)),
 				..Default::default()
 			})
 		} else {

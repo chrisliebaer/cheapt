@@ -6,24 +6,25 @@ use std::collections::{
 use async_openai::types::{
 	ChatCompletionRequestMessage,
 	ChatCompletionRequestSystemMessage,
+	ChatCompletionRequestSystemMessageContent,
 	ChatCompletionRequestUserMessageContent,
 	CreateChatCompletionRequest,
 	FinishReason,
 };
 use miette::{
-	miette,
 	IntoDiagnostic,
 	Report,
 	Result,
 	WrapErr,
+	miette,
 };
 use poise::{
+	FrameworkContext,
 	serenity_prelude::{
 		ChannelId,
 		CreateMessage,
 		Message,
 	},
-	FrameworkContext,
 };
 use sea_orm::DatabaseConnection;
 use tracing::{
@@ -33,10 +34,10 @@ use tracing::{
 use uuid::Uuid;
 
 use crate::{
+	AppState,
 	context_extraction::ContextMessageVariant,
 	invocation_builder::InvocationBuilder,
 	user_from_db_or_create,
-	AppState,
 };
 
 #[derive(serde::Serialize)]
@@ -287,7 +288,7 @@ async fn generate_openai_response<'a>(
 	}
 
 	let mut request_messages = vec![ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
-		content: prepromt,
+		content: ChatCompletionRequestSystemMessageContent::Text(prepromt),
 		..Default::default()
 	})];
 	request_messages.append(&mut invocation_builder.build_request());
@@ -298,9 +299,7 @@ async fn generate_openai_response<'a>(
 		user: Some(uuid.hyphenated().to_string()),
 		model: app.model.clone(),
 		messages: request_messages,
-		top_p: Some(0.8),
-		temperature: Some(1.5),
-		max_tokens: Some(context_settings.max_token_count as u32),
+		max_completion_tokens: Some(context_settings.max_token_count as u32),
 		..Default::default()
 	};
 
@@ -378,7 +377,11 @@ fn dump_request_messages(messages: &Vec<ChatCompletionRequestMessage>) {
 	for message in messages {
 		let message = match &message {
 			ChatCompletionRequestMessage::System(msg) => {
-				format!("SYSTEM({:?}): {}", msg.name, msg.content)
+				let content_str = match &msg.content {
+					ChatCompletionRequestSystemMessageContent::Text(text) => text.clone(),
+					_ => "[Non-text content]".to_string(),
+				};
+				format!("SYSTEM({:?}): {}", msg.name, content_str)
 			},
 			ChatCompletionRequestMessage::User(msg) => {
 				let content = match &msg.content {
