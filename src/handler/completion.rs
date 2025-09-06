@@ -3,13 +3,9 @@ use std::collections::{
 	HashSet,
 };
 
-use async_openai::types::{
-	ChatCompletionRequestMessage,
-	ChatCompletionRequestSystemMessage,
-	ChatCompletionRequestSystemMessageContent,
-	ChatCompletionRequestUserMessageContent,
-	CreateChatCompletionRequest,
-	FinishReason,
+use llm::chat::{
+	ChatMessage,
+	ChatRole,
 };
 use miette::{
 	IntoDiagnostic,
@@ -31,7 +27,6 @@ use tracing::{
 	info,
 	trace,
 };
-use uuid::Uuid;
 
 use crate::{
 	AppState,
@@ -103,7 +98,7 @@ pub async fn handle_completion(
 		return Ok(());
 	}
 
-	let user_uuid = Uuid::from_slice(db_user.uuid.as_slice()).expect("malformed uuid");
+	// let user_uuid = Uuid::from_slice(db_user.uuid.as_slice()).expect("malformed uuid");
 
 	// check if channel is whitelisted
 	if !app.whitelist.contains(new_message.channel_id, &ctx).await? {
@@ -152,7 +147,7 @@ pub async fn handle_completion(
 
 	let completion_request = tokio::time::timeout(
 		std::time::Duration::from_secs(60),
-		generate_openai_response(ctx, app, new_message, &user_uuid),
+		generate_llm_response(ctx, app, new_message),
 	);
 
 	// assuming typing notifications don't fail, we can just wait for the fork to finish and will keep sending typing
@@ -211,7 +206,7 @@ async fn create_tera_context<'a>(ctx: &'a poise::serenity_prelude::Context, mess
 				.member(ctx, id)
 				.await
 				.into_diagnostic()
-				.wrap_err("failed to fetch ourself as guild member")?
+				.wrap_err("failed to fetch ourselves as guild member")?
 				.nick
 				.unwrap_or_else(|| ctx.cache.current_user().name.to_string());
 			tera_context.insert("name", &self_member);
@@ -240,30 +235,26 @@ async fn create_tera_context<'a>(ctx: &'a poise::serenity_prelude::Context, mess
 	Ok(tera_context)
 }
 
-/// Called in preparation of invoking OpenAI for response generation.
+/// Called in preparation of invoking LLM for response generation.
 /// This function will load the configuration for the current execution context and fetch required messages from
 /// Discord.
 /// This includes possible resolution of reply chains and potential follow-up messages.
-async fn generate_openai_response<'a>(
+async fn generate_llm_response<'a>(
 	ctx: &'a poise::serenity_prelude::Context,
 	app: &'a AppState,
 	message: &'a Message,
-	uuid: &Uuid,
 ) -> Result<()> {
 	let tera = &app.tera;
 	let context_settings = &app.context_settings;
-	let openai_client = &app.openai_client;
+	let llm_client = &app.llm_client;
 
 	let tera_context = create_tera_context(ctx, message).await?;
-	tera
-		.render("preprompt.txt", &tera_context)
-		.into_diagnostic()
-		.wrap_err("failed to render preprompt")?;
 
 	// remove empty lines, and truncate leading and trailing whitespace
-	let prepromt = tera
+	let preprompt = tera
 		.render("preprompt.txt", &tera_context)
-		.unwrap()
+		.into_diagnostic()
+		.wrap_err("failed to render preprompt")?
 		.lines()
 		.map(|l| l.trim())
 		.filter(|l| !l.is_empty())
@@ -287,43 +278,30 @@ async fn generate_openai_response<'a>(
 		invocation_builder.add_message(message);
 	}
 
-	let mut request_messages = vec![ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
-		content: ChatCompletionRequestSystemMessageContent::Text(prepromt),
-		..Default::default()
-	})];
-	request_messages.append(&mut invocation_builder.build_request());
-	dump_request_messages(&request_messages);
+	// Build the conversation using LLM crate's ChatMessage format
+	let mut messages = Vec::new();
 
-	let request = CreateChatCompletionRequest {
-		// pass uuid as user id, so we can identify the user, if we need to, without leaking discord user id
-		user: Some(uuid.hyphenated().to_string()),
-		model: app.model.clone(),
-		messages: request_messages,
-		max_completion_tokens: Some(context_settings.max_token_count as u32),
-		..Default::default()
-	};
+	// Add system message as the first user message with system context
+	messages.push(ChatMessage::user().content(preprompt).build());
 
-	let response = openai_client
-		.chat()
-		.create(request)
+	// Convert invocation builder's messages to LLM format - this needs to be implemented
+	// For now, let's manually convert the messages
+	let llm_messages = invocation_builder.build_llm_messages();
+	messages.extend(llm_messages);
+
+	dump_llm_messages(&messages);
+
+	let response = llm_client
+		.chat(&messages)
 		.await
 		.into_diagnostic()
 		.wrap_err("completion request failed")?;
 
-	let choice = response.choices.first().ok_or(miette!("Empty choice array received"))?;
-	info!(finish_reason = ?choice.finish_reason, "OpenAI response: {:?}", choice.message.content);
+	let content = response.text().ok_or(miette!("LLM response has no content"))?;
 
-	if choice.finish_reason == Some(FinishReason::ContentFilter) {
-		Err(miette!("OpenAI response was filtered"))?;
-	}
+	info!("LLM response: {}", content);
 
-	let content = choice
-		.message
-		.content
-		.as_ref()
-		.ok_or(miette!("OpenAI response has no content"))?;
-
-	let content = invocation_builder.retransform_response(content);
+	let content = invocation_builder.retransform_response(&content);
 
 	message
 		.channel_id
@@ -371,36 +349,6 @@ async fn remove_opted_out_users(db: &DatabaseConnection, messages: &mut Vec<Cont
 	Ok(())
 }
 
-fn dump_request_messages(messages: &Vec<ChatCompletionRequestMessage>) {
-	let mut lines = Vec::new();
-
-	for message in messages {
-		let message = match &message {
-			ChatCompletionRequestMessage::System(msg) => {
-				let content_str = match &msg.content {
-					ChatCompletionRequestSystemMessageContent::Text(text) => text.clone(),
-					_ => "[Non-text content]".to_string(),
-				};
-				format!("SYSTEM({:?}): {}", msg.name, content_str)
-			},
-			ChatCompletionRequestMessage::User(msg) => {
-				let content = match &msg.content {
-					ChatCompletionRequestUserMessageContent::Text(text) => text,
-					ChatCompletionRequestUserMessageContent::Array(_) => panic!("unsupported"),
-				};
-				format!("USER({:?}): {}", msg.name, content)
-			},
-			ChatCompletionRequestMessage::Assistant(msg) => {
-				format!("ASSISTANT({:?}): {:?}", msg.name, msg.content)
-			},
-			_ => panic!("unsupported"),
-		};
-		lines.push(message);
-	}
-
-	trace!("Sending following context to completion:\n{}", lines.join("\n"));
-}
-
 /// Sends a typing indicator to a specified channel every 5 seconds, while running a separate task to handle messages
 /// concurrently.
 ///
@@ -444,4 +392,19 @@ fn dump_extracted_messages(messages: &[ContextMessageVariant]) {
 	}
 
 	trace!("Extracted the following messages from discord:\n{}", lines.join("\n"));
+}
+
+fn dump_llm_messages(messages: &[ChatMessage]) {
+	let mut lines = Vec::new();
+
+	for message in messages {
+		let role_str = match message.role {
+			ChatRole::User => "USER",
+			ChatRole::Assistant => "ASSISTANT",
+		};
+
+		lines.push(format!("{}: {}", role_str, message.content));
+	}
+
+	trace!("Sending following context to LLM:\n{}", lines.join("\n"));
 }

@@ -12,10 +12,6 @@ use std::{
 	time::Duration,
 };
 
-use async_openai::{
-	config::OpenAIConfig,
-	Client,
-};
 use chrono::{
 	DateTime,
 	Utc,
@@ -23,6 +19,13 @@ use chrono::{
 use entity::user;
 use envconfig::Envconfig;
 use lazy_static::lazy_static;
+use llm::{
+	LLMProvider,
+	builder::{
+		LLMBackend,
+		LLMBuilder,
+	},
+};
 use miette::{
 	IntoDiagnostic,
 	Report,
@@ -34,6 +37,10 @@ use migration::{
 	MigratorTrait,
 };
 use poise::{
+	Framework,
+	FrameworkContext,
+	FrameworkError,
+	FrameworkOptions,
 	serenity_prelude::{
 		CacheHttp,
 		ChannelId,
@@ -43,10 +50,6 @@ use poise::{
 		GatewayIntents,
 		User,
 	},
-	Framework,
-	FrameworkContext,
-	FrameworkError,
-	FrameworkOptions,
 };
 use rand::random;
 use sea_orm::{
@@ -63,11 +66,11 @@ use sea_orm::{
 use tera::Tera;
 use tokio::sync::Mutex;
 use tracing::{
+	Instrument,
 	error,
 	info,
 	info_span,
 	trace,
-	Instrument,
 };
 
 use crate::{
@@ -140,6 +143,7 @@ impl FromStr for ParsedDuration {
 struct Whitelist {
 	ids: HashSet<u64>,
 }
+
 impl Whitelist {
 	/// Checks recursively if the given channel id is in the whitelist.
 	///
@@ -209,14 +213,14 @@ impl FromStr for Whitelist {
 
 struct AppState {
 	tera: Tera,
-	openai_client: Client<OpenAIConfig>,
-	model: String,
+	llm_client: Box<dyn LLMProvider + Send + Sync>,
 	db: DatabaseConnection,
 	path_rate_limits: Mutex<PathRateLimits>,
 	context_settings: InvocationContextSettings,
 	whitelist: Whitelist,
 	opt_out_lockout: Duration,
 }
+
 type Context<'a> = poise::Context<'a, AppState, Report>;
 
 #[tokio::main(flavor = "current_thread")]
@@ -235,9 +239,15 @@ async fn main() -> Result<()> {
 			.wrap_err("failed to load templates")?
 	};
 
-	let openai_client = {
-		let config = OpenAIConfig::new().with_api_key(&env_config.openai_token);
-		Client::with_config(config)
+	let llm_client = {
+		LLMBuilder::new()
+			.backend(LLMBackend::OpenAI)
+			.api_key(&env_config.openai_token)
+			.model(&env_config.model)
+			.max_tokens(2000)
+			.build()
+			.into_diagnostic()
+			.wrap_err("failed to create LLM client")?
 	};
 
 	let db = {
@@ -321,8 +331,7 @@ async fn main() -> Result<()> {
 			Box::pin(async move {
 				Ok(AppState {
 					tera,
-					model: env_config.model,
-					openai_client,
+					llm_client,
 					db,
 					path_rate_limits: Mutex::new(path_rate_limits),
 					context_settings: InvocationContextSettings {
