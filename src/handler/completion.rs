@@ -79,7 +79,7 @@ impl From<&poise::serenity_prelude::User> for UserContext {
 	fn from(user: &poise::serenity_prelude::User) -> Self {
 		Self {
 			id: user.id.into(),
-			name: user.name.clone(),
+			name: user.global_name.clone().unwrap_or(user.name.clone()),
 		}
 	}
 }
@@ -292,7 +292,7 @@ async fn generate_llm_response<'a>(
 	dump_llm_messages(&messages);
 
 	let response = llm_client
-		.chat(&messages)
+		.chat_with_tools(&messages, Some(&[]))
 		.await
 		.into_diagnostic()
 		.wrap_err("completion request failed")?;
