@@ -1,7 +1,5 @@
 .env
-
+mcp.json
 /target
 /.idea/*
-
-
 /templates

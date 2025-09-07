@@ -2,6 +2,8 @@ mod context_extraction;
 mod gcra;
 mod handler;
 mod invocation_builder;
+mod mcp;
+mod mcp_config;
 mod message_cache;
 mod rate_limit_config;
 
@@ -22,8 +24,10 @@ use lazy_static::lazy_static;
 use llm::{
 	LLMProvider,
 	builder::{
+		FunctionBuilder,
 		LLMBackend,
 		LLMBuilder,
+		ParamBuilder,
 	},
 };
 use miette::{
@@ -82,6 +86,8 @@ use crate::{
 		completion::handle_completion,
 		opt_out,
 	},
+	mcp::McpManager,
+	mcp_config::McpConfig,
 	message_cache::MessageCache,
 	rate_limit_config::{
 		PathRateLimits,
@@ -214,6 +220,7 @@ impl FromStr for Whitelist {
 struct AppState {
 	tera: Tera,
 	llm_client: Box<dyn LLMProvider + Send + Sync>,
+	mcp_manager: McpManager,
 	db: DatabaseConnection,
 	path_rate_limits: Mutex<PathRateLimits>,
 	context_settings: InvocationContextSettings,
@@ -232,6 +239,9 @@ async fn main() -> Result<()> {
 		.into_diagnostic()
 		.wrap_err("failed to load environment variables")?;
 
+	let mcp_config = McpConfig::load_default().await?.unwrap();
+	let mcp_manager = McpManager::initialize_from_config(&mcp_config).await?;
+
 	let tera = {
 		let template_dir = format!("{}/{}", env_config.template_dir, "*.txt");
 		Tera::new(&template_dir)
@@ -240,14 +250,17 @@ async fn main() -> Result<()> {
 	};
 
 	let llm_client = {
-		LLMBuilder::new()
+		let mut builder = LLMBuilder::new()
 			.backend(LLMBackend::OpenAI)
 			.api_key(&env_config.openai_token)
 			.model(&env_config.model)
-			.max_tokens(2000)
-			.build()
-			.into_diagnostic()
-			.wrap_err("failed to create LLM client")?
+			.max_tokens(2000);
+
+		for fun_builder in mcp_manager.get_llm_functions() {
+			builder = builder.function(fun_builder);
+		}
+
+		builder.build().into_diagnostic().wrap_err("failed to create LLM client")?
 	};
 
 	let db = {
@@ -332,6 +345,7 @@ async fn main() -> Result<()> {
 				Ok(AppState {
 					tera,
 					llm_client,
+					mcp_manager,
 					db,
 					path_rate_limits: Mutex::new(path_rate_limits),
 					context_settings: InvocationContextSettings {

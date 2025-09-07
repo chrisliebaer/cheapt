@@ -5,7 +5,6 @@ resolver = "2"
 [workspace.dependencies]
 entity = { path = "entity" }
 migration = { path = "migration" }
-llm = { path = "llm", features = ["openai"] }
 
 async-trait = "0.1"
 tracing = "0.1"
@@ -15,18 +14,28 @@ semver = "1.0"
 chrono = "0.4"
 serde = "1.0"
 serde_json = "1.0"
-toml = "0.8"
+toml = "0.9"
 uuid = "1.7"
 lazy_static = "1.4"
 tokio = { version = "1.35", features = ["macros", "rt", "time"] }
 sea-orm = { version = "0.12", features = ["sqlx-mysql", "runtime-tokio-rustls", "macros", "debug-print", "with-chrono", "with-uuid"] }
 
-envconfig = "0.10"
+envconfig = "0.11"
 poise = "0.6"
 regex = "1.10"
 tera = "1"
-rand = "0.8"
+rand = "0.9"
 humantime = "2.1"
+log = "0.4"
+
+llm = { path = "llm", features = ["openai"] }
+rmcp = { version = "0.6.0", features = [
+    "client",
+    "transport-sse-client",
+    "transport-sse-client-reqwest",
+    "transport-streamable-http-client-reqwest",
+    "transport-streamable-http-client"] }
+reqwest = "0.12"
 
 [package]
 name = "cheapt"
@@ -43,9 +52,7 @@ publish = false
 [dependencies]
 entity.workspace = true
 migration.workspace = true
-llm.workspace = true
 
-async-trait.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 miette.workspace = true
@@ -65,10 +72,15 @@ regex.workspace = true
 tera.workspace = true
 rand.workspace = true
 humantime.workspace = true
-log = "0.4.20"
+log.workspace = true
+
+llm.workspace = true
+rmcp.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
-ctor = "0.2"
+ctor = "0.5"
+tempfile = "3.0"
 sea-orm = { version = "0.12", features = ["sqlx-mysql", "runtime-tokio-rustls", "macros", "debug-print", "with-chrono", "with-uuid", "mock"] }
 
 # poise uses serenity 0.12.2, which is currently broken, we need to use 0.12.1 for now
