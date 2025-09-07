@@ -105,8 +105,6 @@ pub async fn handle_completion(
 		return Ok(());
 	}
 
-	// let user_uuid = Uuid::from_slice(db_user.uuid.as_slice()).expect("malformed uuid");
-
 	// check if channel is whitelisted
 	if !app.whitelist.contains(new_message.channel_id, &ctx).await? {
 		new_message
