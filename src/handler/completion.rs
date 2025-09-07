@@ -32,10 +32,7 @@ use serde_json::{
 	Value,
 	json,
 };
-use tracing::{
-	info,
-	trace,
-};
+use tracing::trace;
 
 use crate::{
 	AppState,
@@ -379,14 +376,21 @@ async fn generate_llm_response<'a>(
 			// No tool calls - we have our final response
 			let content = response.text().ok_or(miette!("LLM response has no content"))?;
 			trace!(
-				"Final response after {} iterations, {} tools called:\n{}",
+				"Final response after {} iterations, {} tools called{}",
 				iteration + 1,
 				tool_calls.len(),
-				tool_calls
-					.iter()
-					.map(|call| format!("  - {} ({})", call.function.name, call.function.arguments))
-					.collect::<Vec<_>>()
-					.join("\n")
+				if tool_calls.is_empty() {
+					String::new()
+				} else {
+					format!(
+						":\n{}",
+						tool_calls
+							.iter()
+							.map(|call| format!("  - {} ({})", call.function.name, call.function.arguments))
+							.collect::<Vec<_>>()
+							.join("\n")
+					)
+				}
 			);
 
 			let content = invocation_builder.retransform_response(&content);
@@ -499,24 +503,6 @@ fn dump_llm_messages(messages: &[ChatMessage]) {
 }
 
 async fn process_tool_call(tool_call: &ToolCall, mcp_manager: &McpManager) -> Result<Value> {
-	// llm can produce invalid json, so we need to handle that gracefully
-	let args: Result<Value, _> = serde_json::from_str(&tool_call.function.arguments);
-	let args = match args {
-		Ok(Value::Object(map)) => map,
-		Ok(_) => {
-			return Ok(json!({
-				"id": "invalid_arguments",
-				"error": "Tool arguments must be a JSON object"
-			}));
-		},
-		Err(err) => {
-			return Ok(json!({
-				"id": "invalid_json",
-				"error": format!("Failed to parse tool arguments as JSON: {}", err)
-			}));
-		},
-	};
-
 	match mcp_manager.handle_llm_tool_call(tool_call).await {
 		None => Ok(json!({
 			"id": "tool_not_found",

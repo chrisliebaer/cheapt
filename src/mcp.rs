@@ -1,17 +1,13 @@
 use std::{
-	collections::{
-		HashMap,
-		hash_map::Values,
-	},
+	collections::HashMap,
 	ops::Deref,
+	process::Stdio,
 	str::FromStr,
-	time::Duration,
 };
 
 use llm::{
 	ToolCall,
 	builder::FunctionBuilder,
-	chat::Tool,
 };
 use log::{
 	debug,
@@ -32,25 +28,23 @@ use rmcp::{
 		CallToolResult,
 		ClientInfo,
 		Content,
-		ErrorData,
 		Implementation,
 		InitializeRequestParam,
 		ListToolsResult,
-		ResourceContents,
 	},
 	service::RunningService,
 	transport::{
+		ConfigureCommandExt,
 		SseClientTransport,
 		StreamableHttpClientTransport,
+		TokioChildProcess,
 		sse_client::SseClientConfig,
 		streamable_http_client::StreamableHttpClientTransportConfig,
 	},
 };
 use serde_json::Value;
-use tracing::{
-	info,
-	warn,
-};
+use tokio::process::Command;
+use tracing::info;
 
 use crate::mcp_config::{
 	McpConfig,
@@ -131,6 +125,38 @@ fn extract_text_from_content(content: &[Content]) -> String {
 	result
 }
 
+/// Create a reqwest HTTP client with the provided headers
+/// Common functionality for both SSE and StreamableHttp transports
+fn create_http_client_with_headers(headers: &HashMap<String, String>) -> Result<Client> {
+	let mut client_builder = Client::builder();
+
+	let mut header_map = reqwest::header::HeaderMap::new();
+	for (key, value) in headers {
+		if let (Ok(name), Ok(val)) = (
+			reqwest::header::HeaderName::from_str(key),
+			reqwest::header::HeaderValue::from_str(value),
+		) {
+			header_map.insert(name, val);
+		}
+	}
+	client_builder = client_builder.default_headers(header_map);
+
+	client_builder
+		.build()
+		.into_diagnostic()
+		.wrap_err("Failed to build reqwest client")
+}
+
+/// Common functionality for initializing an MCP client and fetching tools
+async fn initialize_mcp_client(
+	client: RunningService<RoleClient, InitializeRequestParam>,
+	server_name: &str,
+) -> Result<McpClientWithTools> {
+	McpClientWithTools::new(client)
+		.await
+		.wrap_err(format!("Failed to fetch tools from MCP server '{}'", server_name))
+}
+
 /// Struct that combines an MCP client with its cached tools
 pub struct McpClientWithTools {
 	client: RunningService<RoleClient, InitializeRequestParam>,
@@ -191,30 +217,37 @@ impl McpManager {
 				McpServerConfig::Http {
 					url,
 					headers,
-				} => {},
+				} => {
+					info!("Connecting to HTTP MCP server '{}' at {}", server_name, url);
+
+					let http_client = create_http_client_with_headers(headers)
+						.wrap_err(format!("Failed to build reqwest client for MCP server '{}'", server_name))?;
+
+					let transport_config = StreamableHttpClientTransportConfig {
+						uri: url.clone().into(),
+						..Default::default()
+					};
+
+					let transport = StreamableHttpClientTransport::with_client(http_client, transport_config);
+					let client = client_info
+						.clone()
+						.serve(transport)
+						.await
+						.into_diagnostic()
+						.wrap_err(format!("Failed to initialize MCP client for server '{}'", server_name))?;
+
+					let client_with_tools = initialize_mcp_client(client, server_name).await?;
+					clients.insert(server_name.clone(), client_with_tools);
+				},
 				McpServerConfig::Sse {
 					url,
 					headers,
 				} => {
 					info!("Connecting to SSE MCP server '{}' at {}", server_name, url);
 
-					// setup reqwest client with headers according to config
-					let mut client_builder = Client::builder();
-
-					let mut header_map = reqwest::header::HeaderMap::new();
-					for (key, value) in headers {
-						if let (Ok(name), Ok(val)) = (
-							reqwest::header::HeaderName::from_str(key),
-							reqwest::header::HeaderValue::from_str(value),
-						) {
-							header_map.insert(name, val);
-						}
-					}
-					client_builder = client_builder.default_headers(header_map);
-					let http_client = client_builder
-						.build()
-						.into_diagnostic()
+					let http_client = create_http_client_with_headers(headers)
 						.wrap_err(format!("Failed to build reqwest client for MCP server '{}'", server_name))?;
+
 					let transport_config = SseClientConfig {
 						sse_endpoint: url.clone().into(),
 						..Default::default()
@@ -224,6 +257,7 @@ impl McpManager {
 						.await
 						.into_diagnostic()
 						.wrap_err(format!("Failed to start SSE transport for MCP server '{}'", server_name))?;
+
 					let client = client_info
 						.clone()
 						.serve(transport)
@@ -231,11 +265,7 @@ impl McpManager {
 						.into_diagnostic()
 						.wrap_err(format!("Failed to initialize MCP client for server '{}'", server_name))?;
 
-					// Fetch tools immediately after client initialization
-					let client_with_tools = McpClientWithTools::new(client)
-						.await
-						.wrap_err(format!("Failed to fetch tools from MCP server '{}'", server_name))?;
-
+					let client_with_tools = initialize_mcp_client(client, server_name).await?;
 					clients.insert(server_name.clone(), client_with_tools);
 				},
 				McpServerConfig::Stdio {
@@ -243,7 +273,34 @@ impl McpManager {
 					args,
 					env,
 				} => {
-					warn!("Stdio transport not yet implemented for server '{}', skipping", server_name);
+					info!("Connecting to Stdio MCP server '{}' with command: {}", server_name, command);
+
+					let mut cmd = Command::new(command);
+					if let Some(args) = args {
+						cmd.args(args);
+					}
+					for (key, value) in env {
+						cmd.env(key, value);
+					}
+
+					// configure stdio - stdout and stdin are piped for communication, stderr inherits for debugging
+					cmd = cmd.configure(|c| {
+						c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+					});
+
+					let transport = TokioChildProcess::new(cmd)
+						.into_diagnostic()
+						.wrap_err(format!("Failed to start child process for MCP server '{}'", server_name))?;
+
+					let client = client_info
+						.clone()
+						.serve(transport)
+						.await
+						.into_diagnostic()
+						.wrap_err(format!("Failed to initialize MCP client for server '{}'", server_name))?;
+
+					let client_with_tools = initialize_mcp_client(client, server_name).await?;
+					clients.insert(server_name.clone(), client_with_tools);
 				},
 			}
 		}
@@ -310,7 +367,7 @@ impl McpManager {
 		let call = &tool_call.function;
 
 		// figure out which client to use based on tool name
-		let find_result = self.clients.iter().find(|(server_name, client)| {
+		let find_result = self.clients.iter().find(|(_server_name, client)| {
 			let tools = &client.tools().tools;
 			tools.iter().any(|tool| tool.name == call.name)
 		});

@@ -74,26 +74,6 @@ impl McpConfig {
 	}
 }
 
-impl McpServerConfig {
-	pub fn get_connection_url(&self) -> Option<&str> {
-		match self {
-			McpServerConfig::Http {
-				url, ..
-			} => Some(url),
-			McpServerConfig::Sse {
-				url, ..
-			} => Some(url),
-			McpServerConfig::Stdio {
-				..
-			} => None, // stdio connections don't use URLs
-		}
-	}
-
-	pub fn is_http_based(&self) -> bool {
-		matches!(self, McpServerConfig::Http { .. } | McpServerConfig::Sse { .. })
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use std::collections::HashMap;

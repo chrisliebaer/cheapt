@@ -24,10 +24,8 @@ use lazy_static::lazy_static;
 use llm::{
 	LLMProvider,
 	builder::{
-		FunctionBuilder,
 		LLMBackend,
 		LLMBuilder,
-		ParamBuilder,
 	},
 };
 use miette::{
