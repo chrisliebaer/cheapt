@@ -1,15 +1,7 @@
 use std::collections::HashMap;
 
-use async_openai::types::{
-	ChatCompletionRequestAssistantMessage,
-	ChatCompletionRequestAssistantMessageContent,
-	ChatCompletionRequestMessage,
-	ChatCompletionRequestSystemMessage,
-	ChatCompletionRequestSystemMessageContent,
-	ChatCompletionRequestUserMessage,
-	ChatCompletionRequestUserMessageContent,
-};
 use lazy_static::lazy_static;
+use llm::chat::ChatMessage;
 use poise::serenity_prelude::{
 	EmojiId,
 	Message,
@@ -80,7 +72,7 @@ impl InvocationBuilder {
 
 	/// Adds a message to the conversation.
 	/// This will extract emotes and users from the message and add them to the cache.
-	/// Add all messages you want to include in the conversation before calling `build_request`.
+	/// Add all messages you want to include in the conversation before calling `build_llm_messages`.
 	pub fn add_message(&mut self, message: &Message) {
 		// add author to user cache
 		self.user_cache.insert(message.author.name.clone(), message.author.id);
@@ -97,87 +89,74 @@ impl InvocationBuilder {
 		self.input_messages.push(message.to_owned());
 	}
 
-	/// Builds a request from the messages added to the builder.
-	/// This will transform the messages into a format that can be used by the OpenAI API, as well as adding additional
-	/// information about the context. Note that no preprompt is added, this is the responsibility of the caller.
-	pub fn build_request(&self) -> Vec<ChatCompletionRequestMessage> {
-		// bookkeeping, since we can't present raw markup to the model
-		let mut request_messages = Vec::<ChatCompletionRequestMessage>::new();
+	/// Builds LLM ChatMessage objects from the messages added to the builder.
+	/// This will transform the messages into a format that can be used by the LLM crate,
+	/// preserving all metadata including author info, message numbers, and reply relationships.
+	pub fn build_llm_messages(&self) -> Vec<ChatMessage> {
+		let mut llm_messages = Vec::new();
 		let mut message_lookup = HashMap::<MessageId, usize>::new();
 		let mut message_counter = 1;
 
-		// convert message to request message
 		for message in self.input_messages.iter() {
-			self.transform_message(message, &mut request_messages, &mut message_lookup, &mut message_counter);
-		}
+			// some messages are completely empty, since they only contain embeds or attachments, we skip those
+			if message.content.is_empty() {
+				continue;
+			}
 
-		request_messages
-	}
+			let has_attachments = !message.attachments.is_empty();
+			let has_embeds = !message.embeds.is_empty();
 
-	fn transform_message(
-		&self,
-		message: &Message,
-		vec: &mut Vec<ChatCompletionRequestMessage>,
-		message_lookup: &mut HashMap<MessageId, usize>,
-		message_counter: &mut usize,
-	) {
-		// some messages are completely empty, since they only contain embeds or attachments, we skip those
-		if message.content.is_empty() {
-			return;
-		}
+			let mut facts = vec![format!("message no. {}", message_counter)];
 
-		let has_attachments = !message.attachments.is_empty();
-		let has_embeds = !message.embeds.is_empty();
-
-		let mut facts = vec![format!("message no. {}", message_counter)];
-
-		// if message is reply to other message, check if the message is in the lookup table and include reference
-		if let Some(referenced_message) = &message.referenced_message {
-			if let Some(ref_number) = message_lookup.get(&referenced_message.id) {
-				facts.push(format!("reply to message no. {}", ref_number));
+			// if message is reply to other message, check if the message is in the lookup table and include reference
+			if let Some(referenced_message) = &message.referenced_message {
+				if let Some(ref_number) = message_lookup.get(&referenced_message.id) {
+					facts.push(format!("reply to message no. {}", ref_number));
+				};
 			};
-		};
 
-		// add information about things the model can't see
-		if has_attachments || has_embeds {
-			facts.push("contains removed attachments or embeds".to_string());
+			// add information about things the model can't see
+			if has_attachments || has_embeds {
+				facts.push("contains removed attachments or embeds".to_string());
+			}
+
+			let is_own_message = message.author.id == self.own_id;
+			let content = self.transform_markup(&message.content);
+
+			// api names are restricted to a-zA-Z0-9_- and max 64 chars
+			let mut author = message
+				.author
+				.name
+				.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_");
+			author.truncate(64);
+
+			// For LLM crate, we need to encode metadata in the content
+			// First add a system-style message with facts, then the actual message
+			let header_content = facts.join(", ");
+			let header_message = ChatMessage::user().content(format!("[SYSTEM: {}]", header_content)).build();
+			llm_messages.push(header_message);
+
+			// Then add the main message with proper role and author info
+			let main_content = if is_own_message {
+				content
+			} else {
+				format!("{}: {}", author, content)
+			};
+
+			let main_message = if is_own_message {
+				ChatMessage::assistant().content(main_content).build()
+			} else {
+				ChatMessage::user().content(main_content).build()
+			};
+
+			llm_messages.push(main_message);
+
+			// message successfully processed, keep track of it's position
+			message_lookup.insert(message.id, message_counter);
+			message_counter += 1;
 		}
 
-		let header = ChatCompletionRequestSystemMessage {
-			content: ChatCompletionRequestSystemMessageContent::Text(facts.join(", ")),
-			..Default::default()
-		};
-
-		let is_own_message = message.author.id == self.own_id;
-		let content = self.transform_markup(&message.content);
-
-		// api names are restricted to a-zA-Z0-9_- and max 64 chars
-		let mut author = message
-			.author
-			.name
-			.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_");
-		author.truncate(64);
-		let author = author;
-
-		let main = if is_own_message {
-			ChatCompletionRequestMessage::Assistant(ChatCompletionRequestAssistantMessage {
-				name: Some("Assistant".to_string()),
-				content: Some(ChatCompletionRequestAssistantMessageContent::Text(content)),
-				..Default::default()
-			})
-		} else {
-			ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
-				name: Some(author),
-				content: ChatCompletionRequestUserMessageContent::Text(content),
-			})
-		};
-
-		vec.push(header.into());
-		vec.push(main);
-
-		// message successfully processed, keep track of it's position
-		message_lookup.insert(message.id, *message_counter);
-		*message_counter += 1;
+		llm_messages
 	}
 
 	/// Transforms markup in a message by replacing user mentions and emote mentions
@@ -215,7 +194,7 @@ impl InvocationBuilder {
 		result.to_string()
 	}
 
-	/// Transforms a response from the OpenAI API into a Discord message.
+	/// Transforms a response from the LLM into a Discord message.
 	/// This will replace @handle with user mentions and :emote_name: with emote mentions.
 	pub fn retransform_response(&self, message: &str) -> String {
 		let result = message.to_string();

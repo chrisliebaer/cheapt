@@ -3,14 +3,15 @@ use std::collections::{
 	HashSet,
 };
 
-use async_openai::types::{
-	ChatCompletionRequestMessage,
-	ChatCompletionRequestSystemMessage,
-	ChatCompletionRequestSystemMessageContent,
-	ChatCompletionRequestUserMessageContent,
-	CreateChatCompletionRequest,
-	FinishReason,
+use llm::{
+	FunctionCall,
+	ToolCall,
+	chat::{
+		ChatMessage,
+		ChatRole,
+	},
 };
+use log::debug;
 use miette::{
 	IntoDiagnostic,
 	Report,
@@ -27,16 +28,17 @@ use poise::{
 	},
 };
 use sea_orm::DatabaseConnection;
-use tracing::{
-	info,
-	trace,
+use serde_json::{
+	Value,
+	json,
 };
-use uuid::Uuid;
+use tracing::trace;
 
 use crate::{
 	AppState,
 	context_extraction::ContextMessageVariant,
 	invocation_builder::InvocationBuilder,
+	mcp::McpManager,
 	user_from_db_or_create,
 };
 
@@ -84,7 +86,7 @@ impl From<&poise::serenity_prelude::User> for UserContext {
 	fn from(user: &poise::serenity_prelude::User) -> Self {
 		Self {
 			id: user.id.into(),
-			name: user.name.clone(),
+			name: user.global_name.clone().unwrap_or(user.name.clone()),
 		}
 	}
 }
@@ -102,8 +104,6 @@ pub async fn handle_completion(
 		trace!("User opted out, not sending reply");
 		return Ok(());
 	}
-
-	let user_uuid = Uuid::from_slice(db_user.uuid.as_slice()).expect("malformed uuid");
 
 	// check if channel is whitelisted
 	if !app.whitelist.contains(new_message.channel_id, &ctx).await? {
@@ -152,7 +152,7 @@ pub async fn handle_completion(
 
 	let completion_request = tokio::time::timeout(
 		std::time::Duration::from_secs(60),
-		generate_openai_response(ctx, app, new_message, &user_uuid),
+		generate_llm_response(ctx, app, new_message),
 	);
 
 	// assuming typing notifications don't fail, we can just wait for the fork to finish and will keep sending typing
@@ -211,7 +211,7 @@ async fn create_tera_context<'a>(ctx: &'a poise::serenity_prelude::Context, mess
 				.member(ctx, id)
 				.await
 				.into_diagnostic()
-				.wrap_err("failed to fetch ourself as guild member")?
+				.wrap_err("failed to fetch ourselves as guild member")?
 				.nick
 				.unwrap_or_else(|| ctx.cache.current_user().name.to_string());
 			tera_context.insert("name", &self_member);
@@ -240,30 +240,27 @@ async fn create_tera_context<'a>(ctx: &'a poise::serenity_prelude::Context, mess
 	Ok(tera_context)
 }
 
-/// Called in preparation of invoking OpenAI for response generation.
+/// Called in preparation of invoking LLM for response generation.
 /// This function will load the configuration for the current execution context and fetch required messages from
 /// Discord.
 /// This includes possible resolution of reply chains and potential follow-up messages.
-async fn generate_openai_response<'a>(
+async fn generate_llm_response<'a>(
 	ctx: &'a poise::serenity_prelude::Context,
 	app: &'a AppState,
 	message: &'a Message,
-	uuid: &Uuid,
 ) -> Result<()> {
 	let tera = &app.tera;
 	let context_settings = &app.context_settings;
-	let openai_client = &app.openai_client;
+	let llm_client = &app.llm_client;
+	let mcp_manager = &app.mcp_manager;
 
 	let tera_context = create_tera_context(ctx, message).await?;
-	tera
-		.render("preprompt.txt", &tera_context)
-		.into_diagnostic()
-		.wrap_err("failed to render preprompt")?;
 
 	// remove empty lines, and truncate leading and trailing whitespace
-	let prepromt = tera
+	let preprompt = tera
 		.render("preprompt.txt", &tera_context)
-		.unwrap()
+		.into_diagnostic()
+		.wrap_err("failed to render preprompt")?
 		.lines()
 		.map(|l| l.trim())
 		.filter(|l| !l.is_empty())
@@ -273,7 +270,14 @@ async fn generate_openai_response<'a>(
 	// TODO: implement message cache to avoid fetching messages multiple times
 	// TODO: pass message cache as argument
 	let mut chat_history = context_settings.extract_context_from_message(ctx, message).await?;
-	dump_extracted_messages(&chat_history);
+
+	if std::env::var("DUMP_EXTRACTED_HISTORY")
+		.map(|v| v.to_lowercase())
+		.map(|v| v == "true" || v == "1")
+		.unwrap_or(false)
+	{
+		dump_extracted_messages(&chat_history);
+	}
 
 	// remove all messages for users that opted out
 	remove_opted_out_users(&app.db, &mut chat_history).await?;
@@ -287,51 +291,118 @@ async fn generate_openai_response<'a>(
 		invocation_builder.add_message(message);
 	}
 
-	let mut request_messages = vec![ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
-		content: ChatCompletionRequestSystemMessageContent::Text(prepromt),
-		..Default::default()
-	})];
-	request_messages.append(&mut invocation_builder.build_request());
-	dump_request_messages(&request_messages);
+	// Build the conversation using LLM crate's ChatMessage format
+	let mut messages = Vec::new();
 
-	let request = CreateChatCompletionRequest {
-		// pass uuid as user id, so we can identify the user, if we need to, without leaking discord user id
-		user: Some(uuid.hyphenated().to_string()),
-		model: app.model.clone(),
-		messages: request_messages,
-		max_completion_tokens: Some(context_settings.max_token_count as u32),
-		..Default::default()
-	};
+	// Add system message as the first user message with system context
+	messages.push(ChatMessage::user().content(preprompt).build());
 
-	let response = openai_client
-		.chat()
-		.create(request)
-		.await
-		.into_diagnostic()
-		.wrap_err("completion request failed")?;
+	// Convert invocation builder's messages to LLM format - this needs to be implemented
+	// For now, let's manually convert the messages
+	let llm_messages = invocation_builder.build_llm_messages();
+	messages.extend(llm_messages);
 
-	let choice = response.choices.first().ok_or(miette!("Empty choice array received"))?;
-	info!(finish_reason = ?choice.finish_reason, "OpenAI response: {:?}", choice.message.content);
+	dump_llm_messages(&messages);
 
-	if choice.finish_reason == Some(FinishReason::ContentFilter) {
-		Err(miette!("OpenAI response was filtered"))?;
+	// Tool calling loop - allow up to 10 iterations before forcing completion
+	const MAX_TOOL_ITERATIONS: usize = 10;
+	const MAX_TOOL_CALLS: usize = 30;
+	let mut conversation = messages;
+
+	// store all tool calls and results outside the loop for persistence across iterations
+	let mut tool_calls: Vec<ToolCall> = Vec::new();
+	let mut tool_results: Vec<ToolCall> = Vec::new();
+
+	for iteration in 0..MAX_TOOL_ITERATIONS {
+		// we limit the number of iterations
+		let tools_available = if iteration == MAX_TOOL_ITERATIONS - 1 {
+			None
+		} else {
+			llm_client.tools()
+		};
+
+		let response = llm_client
+			.chat_with_tools(&conversation, tools_available)
+			.await
+			.into_diagnostic()
+			.wrap_err("completion request failed")?;
+
+		// Check if the model wants to use tools
+		if let Some(new_calls) = response.tool_calls() {
+			// Process tool calls and collect results
+			for call in new_calls.into_iter() {
+				// if we would be over the limit with this call, we stop processing further calls
+				if tool_calls.len() >= MAX_TOOL_CALLS {
+					debug!(
+						"Reached maximum number of tool calls ({}), stopping further tool processing",
+						MAX_TOOL_CALLS
+					);
+					break;
+				}
+
+				debug!("Processing tool call: {}", call.function.name);
+				trace!("  - Arguments: {}", call.function.arguments);
+
+				let result = process_tool_call(&call, mcp_manager).await?;
+				let pretty_json = serde_json::to_string_pretty(&result)
+					.into_diagnostic()
+					.wrap_err("failed to pretty-print tool result")?;
+				trace!("  - Response: {}", pretty_json);
+
+				// results are reported back with same tool call struct, yes
+				tool_results.push(ToolCall {
+					id: call.id.clone(),
+					call_type: "function".to_string(),
+					function: FunctionCall {
+						name: call.function.name.clone(),
+						arguments: serde_json::to_string(&result)
+							.into_diagnostic()
+							.wrap_err("failed to serialize tool result")?,
+					},
+				});
+
+				// add last so we avoid a clone and can consume the call directly
+				tool_calls.push(call);
+			}
+
+			// add assistant's tool call to conversation
+			conversation.push(ChatMessage::assistant().tool_use(tool_calls.clone()).content("").build());
+
+			// add tool results to conversation
+			conversation.push(ChatMessage::assistant().tool_result(tool_results.clone()).content("").build());
+		} else {
+			// No tool calls - we have our final response
+			let content = response.text().ok_or(miette!("LLM response has no content"))?;
+			trace!(
+				"Final response after {} iterations, {} tools called{}",
+				iteration + 1,
+				tool_calls.len(),
+				if tool_calls.is_empty() {
+					String::new()
+				} else {
+					format!(
+						":\n{}",
+						tool_calls
+							.iter()
+							.map(|call| format!("  - {} ({})", call.function.name, call.function.arguments))
+							.collect::<Vec<_>>()
+							.join("\n")
+					)
+				}
+			);
+
+			let content = invocation_builder.retransform_response(&content);
+
+			message
+				.channel_id
+				.send_message(ctx, CreateMessage::new().reference_message(message).content(content))
+				.await
+				.into_diagnostic()
+				.wrap_err("failed to send reply message")?;
+
+			return Ok(());
+		}
 	}
-
-	let content = choice
-		.message
-		.content
-		.as_ref()
-		.ok_or(miette!("OpenAI response has no content"))?;
-
-	let content = invocation_builder.retransform_response(content);
-
-	message
-		.channel_id
-		.send_message(ctx, CreateMessage::new().reference_message(message).content(content))
-		.await
-		.into_diagnostic()
-		.wrap_err("failed to send reply message")?;
-
 	Ok(())
 }
 
@@ -369,36 +440,6 @@ async fn remove_opted_out_users(db: &DatabaseConnection, messages: &mut Vec<Cont
 	});
 
 	Ok(())
-}
-
-fn dump_request_messages(messages: &Vec<ChatCompletionRequestMessage>) {
-	let mut lines = Vec::new();
-
-	for message in messages {
-		let message = match &message {
-			ChatCompletionRequestMessage::System(msg) => {
-				let content_str = match &msg.content {
-					ChatCompletionRequestSystemMessageContent::Text(text) => text.clone(),
-					_ => "[Non-text content]".to_string(),
-				};
-				format!("SYSTEM({:?}): {}", msg.name, content_str)
-			},
-			ChatCompletionRequestMessage::User(msg) => {
-				let content = match &msg.content {
-					ChatCompletionRequestUserMessageContent::Text(text) => text,
-					ChatCompletionRequestUserMessageContent::Array(_) => panic!("unsupported"),
-				};
-				format!("USER({:?}): {}", msg.name, content)
-			},
-			ChatCompletionRequestMessage::Assistant(msg) => {
-				format!("ASSISTANT({:?}): {:?}", msg.name, msg.content)
-			},
-			_ => panic!("unsupported"),
-		};
-		lines.push(message);
-	}
-
-	trace!("Sending following context to completion:\n{}", lines.join("\n"));
 }
 
 /// Sends a typing indicator to a specified channel every 5 seconds, while running a separate task to handle messages
@@ -444,4 +485,33 @@ fn dump_extracted_messages(messages: &[ContextMessageVariant]) {
 	}
 
 	trace!("Extracted the following messages from discord:\n{}", lines.join("\n"));
+}
+
+fn dump_llm_messages(messages: &[ChatMessage]) {
+	let mut lines = Vec::new();
+
+	for message in messages {
+		let role_str = match message.role {
+			ChatRole::User => "USER",
+			ChatRole::Assistant => "ASSISTANT",
+		};
+
+		lines.push(format!("{}: {}", role_str, message.content));
+	}
+}
+
+async fn process_tool_call(tool_call: &ToolCall, mcp_manager: &McpManager) -> Result<Value> {
+	match mcp_manager.handle_llm_tool_call(tool_call).await {
+		None => Ok(json!({
+			"id": "tool_not_found",
+			"error": format!("No tool found with name '{}'", tool_call.function.name)
+		})),
+		Some(result) => match result {
+			Ok(value) => Ok(value),
+			Err(err) => Ok(json!({
+				"id": "tool_error",
+				"error": format!("Tool execution failed: {}", err)
+			})),
+		},
+	}
 }

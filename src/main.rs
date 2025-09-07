@@ -2,6 +2,8 @@ mod context_extraction;
 mod gcra;
 mod handler;
 mod invocation_builder;
+mod mcp;
+mod mcp_config;
 mod message_cache;
 mod rate_limit_config;
 
@@ -12,10 +14,6 @@ use std::{
 	time::Duration,
 };
 
-use async_openai::{
-	config::OpenAIConfig,
-	Client,
-};
 use chrono::{
 	DateTime,
 	Utc,
@@ -23,6 +21,13 @@ use chrono::{
 use entity::user;
 use envconfig::Envconfig;
 use lazy_static::lazy_static;
+use llm::{
+	LLMProvider,
+	builder::{
+		LLMBackend,
+		LLMBuilder,
+	},
+};
 use miette::{
 	IntoDiagnostic,
 	Report,
@@ -34,6 +39,10 @@ use migration::{
 	MigratorTrait,
 };
 use poise::{
+	Framework,
+	FrameworkContext,
+	FrameworkError,
+	FrameworkOptions,
 	serenity_prelude::{
 		CacheHttp,
 		ChannelId,
@@ -43,10 +52,6 @@ use poise::{
 		GatewayIntents,
 		User,
 	},
-	Framework,
-	FrameworkContext,
-	FrameworkError,
-	FrameworkOptions,
 };
 use rand::random;
 use sea_orm::{
@@ -63,11 +68,11 @@ use sea_orm::{
 use tera::Tera;
 use tokio::sync::Mutex;
 use tracing::{
+	Instrument,
 	error,
 	info,
 	info_span,
 	trace,
-	Instrument,
 };
 
 use crate::{
@@ -79,6 +84,8 @@ use crate::{
 		completion::handle_completion,
 		opt_out,
 	},
+	mcp::McpManager,
+	mcp_config::McpConfig,
 	message_cache::MessageCache,
 	rate_limit_config::{
 		PathRateLimits,
@@ -140,6 +147,7 @@ impl FromStr for ParsedDuration {
 struct Whitelist {
 	ids: HashSet<u64>,
 }
+
 impl Whitelist {
 	/// Checks recursively if the given channel id is in the whitelist.
 	///
@@ -209,14 +217,15 @@ impl FromStr for Whitelist {
 
 struct AppState {
 	tera: Tera,
-	openai_client: Client<OpenAIConfig>,
-	model: String,
+	llm_client: Box<dyn LLMProvider + Send + Sync>,
+	mcp_manager: McpManager,
 	db: DatabaseConnection,
 	path_rate_limits: Mutex<PathRateLimits>,
 	context_settings: InvocationContextSettings,
 	whitelist: Whitelist,
 	opt_out_lockout: Duration,
 }
+
 type Context<'a> = poise::Context<'a, AppState, Report>;
 
 #[tokio::main(flavor = "current_thread")]
@@ -228,6 +237,9 @@ async fn main() -> Result<()> {
 		.into_diagnostic()
 		.wrap_err("failed to load environment variables")?;
 
+	let mcp_config = McpConfig::load_default().await?.unwrap();
+	let mcp_manager = McpManager::initialize_from_config(&mcp_config).await?;
+
 	let tera = {
 		let template_dir = format!("{}/{}", env_config.template_dir, "*.txt");
 		Tera::new(&template_dir)
@@ -235,9 +247,18 @@ async fn main() -> Result<()> {
 			.wrap_err("failed to load templates")?
 	};
 
-	let openai_client = {
-		let config = OpenAIConfig::new().with_api_key(&env_config.openai_token);
-		Client::with_config(config)
+	let llm_client = {
+		let mut builder = LLMBuilder::new()
+			.backend(LLMBackend::OpenAI)
+			.api_key(&env_config.openai_token)
+			.model(&env_config.model)
+			.max_tokens(2000);
+
+		for fun_builder in mcp_manager.get_llm_functions() {
+			builder = builder.function(fun_builder);
+		}
+
+		builder.build().into_diagnostic().wrap_err("failed to create LLM client")?
 	};
 
 	let db = {
@@ -321,8 +342,8 @@ async fn main() -> Result<()> {
 			Box::pin(async move {
 				Ok(AppState {
 					tera,
-					model: env_config.model,
-					openai_client,
+					llm_client,
+					mcp_manager,
 					db,
 					path_rate_limits: Mutex::new(path_rate_limits),
 					context_settings: InvocationContextSettings {
