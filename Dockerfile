@@ -14,6 +14,10 @@ COPY . .
 RUN cargo build --release --bin cheapt
 
 FROM ubuntu:latest AS runtime
+
+# install ca-certificates, used by reqwest for tls connections
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var
+
 ENV RUST_LOG="info,tracing::span=warn,serenity=warn"
 COPY --from=builder /app/target/release/cheapt /usr/bin/cheapt
 WORKDIR /
