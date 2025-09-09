@@ -103,8 +103,11 @@ lazy_static! {
 
 #[derive(Envconfig)]
 struct EnvConfig {
-	#[envconfig(from = "OPENAI_TOKEN")]
-	openai_token: String,
+	#[envconfig(from = "API_KEY")]
+	api_key: String,
+
+	#[envconfig(from = "LLM_PROVIDER")]
+	llm_provider: String,
 
 	#[envconfig(from = "MODEL")]
 	model: String,
@@ -126,6 +129,19 @@ struct EnvConfig {
 
 	#[envconfig(from = "WHITELIST", default = "")]
 	whitelist: Whitelist,
+
+	#[envconfig(from = "COMPLETION_TIMEOUT", default = "60s")]
+	completion_timeout: ParsedDuration,
+}
+
+impl EnvConfig {
+	/// Converts the provider string to LLMBackend enum
+	fn get_llm_backend(&self) -> Result<LLMBackend> {
+		use std::str::FromStr;
+		LLMBackend::from_str(&self.llm_provider)
+			.into_diagnostic()
+			.wrap_err_with(|| format!("unsupported LLM provider: {}", self.llm_provider))
+	}
 }
 
 struct ParsedDuration(Duration);
@@ -224,6 +240,7 @@ struct AppState {
 	context_settings: InvocationContextSettings,
 	whitelist: Whitelist,
 	opt_out_lockout: Duration,
+	completion_timeout: Duration,
 }
 
 type Context<'a> = poise::Context<'a, AppState, Report>;
@@ -248,9 +265,11 @@ async fn main() -> Result<()> {
 	};
 
 	let llm_client = {
+		let backend = env_config.get_llm_backend()?;
+		
 		let mut builder = LLMBuilder::new()
-			.backend(LLMBackend::OpenAI)
-			.api_key(&env_config.openai_token)
+			.backend(backend)
+			.api_key(&env_config.api_key)
 			.model(&env_config.model)
 			.max_tokens(2000);
 
@@ -355,6 +374,7 @@ async fn main() -> Result<()> {
 					},
 					whitelist: env_config.whitelist,
 					opt_out_lockout: env_config.opt_out_lockout.0,
+					completion_timeout: env_config.completion_timeout.0,
 				})
 			})
 		})

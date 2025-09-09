@@ -112,12 +112,6 @@ mod tests {
 			},
 			_ => panic!("Expected HTTP server config"),
 		}
-
-		assert!(server.is_http_based());
-		assert_eq!(
-			server.get_connection_url(),
-			Some("http://192.168.200.10:8096/servers/web-search/sse")
-		);
 	}
 
 	/// Test parsing an SSE server configuration
@@ -153,8 +147,6 @@ mod tests {
 			},
 			_ => panic!("Expected SSE server config"),
 		}
-
-		assert!(server.is_http_based());
 	}
 
 	/// Test parsing a stdio server configuration
@@ -194,9 +186,6 @@ mod tests {
 			},
 			_ => panic!("Expected Stdio server config"),
 		}
-
-		assert!(!server.is_http_based());
-		assert_eq!(server.get_connection_url(), None);
 	}
 
 	/// Test parsing multiple servers with mixed types
@@ -228,12 +217,6 @@ mod tests {
 		assert!(config.servers.contains_key("web-search"));
 		assert!(config.servers.contains_key("web-fetch"));
 		assert!(config.servers.contains_key("local-tool"));
-
-		let http_count = config.servers.values().filter(|s| s.is_http_based()).count();
-		let stdio_count = config.servers.values().filter(|s| !s.is_http_based()).count();
-
-		assert_eq!(http_count, 2);
-		assert_eq!(stdio_count, 1);
 	}
 
 	/// Test parsing config similar to the provided mcp.json

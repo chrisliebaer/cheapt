@@ -150,10 +150,7 @@ pub async fn handle_completion(
 
 	let typing_notification = typing_indicator(ctx, new_message.channel_id);
 
-	let completion_request = tokio::time::timeout(
-		std::time::Duration::from_secs(60),
-		generate_llm_response(ctx, app, new_message),
-	);
+	let completion_request = tokio::time::timeout(app.completion_timeout, generate_llm_response(ctx, app, new_message));
 
 	// assuming typing notifications don't fail, we can just wait for the fork to finish and will keep sending typing
 	// notifications in the meantime
@@ -366,10 +363,10 @@ async fn generate_llm_response<'a>(
 			}
 
 			// add assistant's tool call to conversation
-			conversation.push(ChatMessage::assistant().tool_use(tool_calls.clone()).content("").build());
+			conversation.push(ChatMessage::assistant().tool_use(tool_calls.clone()).build());
 
 			// add tool results to conversation
-			conversation.push(ChatMessage::assistant().tool_result(tool_results.clone()).content("").build());
+			conversation.push(ChatMessage::user().tool_result(tool_results.clone()).build());
 		} else {
 			// No tool calls - we have our final response
 			let content = response.text().ok_or(miette!("LLM response has no content"))?;

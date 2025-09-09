@@ -22,7 +22,8 @@ The bot is in a very early stage of development but already usable.
 
 The project requires the following environment variables:
 
-- `OPENAI_TOKEN`: Your OpenAI API token.
+- `API_KEY`: Your LLM provider API key.
+- `LLM_PROVIDER`: The LLM provider to use. Supported values: `openai`, `anthropic`, `ollama`, `deepseek`, `xai`, `phind`, `google`, `groq`, `azureopenai`, `elevenlabs`, `cohere`, `mistral`, `openrouter`.
 - `MODEL`: The model to use.
 - `DISCORD_TOKEN`: Your Discord bot token.
 - `TEMPLATE_DIR`: The directory where your Tera templates are located. Defaults to `templates`.
@@ -30,6 +31,7 @@ The project requires the following environment variables:
 - `DATABASE_URL`: The URL to your database. For example `mysql://user:password@localhost/database`.
 - `WHITELIST`: A comma separated list of Discord snowflakes for channels, categories, or guilds in which the bot should respond. If empty, the bot will respond in all channels. Defaults to an empty string.
 - `OPT_OUT_LOCKOUT`: The time in seconds a user is locked out from the bot after opting out. Defaults to `30d`. Can use any time format supported by the `humantime` crate.
+- `COMPLETION_TIMEOUT`: The timeout for LLM completion requests. Defaults to `60s`. Can use any time format supported by the `humantime` crate.
 
 ## License
 
