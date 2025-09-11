@@ -189,17 +189,21 @@ impl McpClientWithTools {
 	}
 }
 
-/// Manager for multiple MCP clients connected to different servers.
-/// Holds a map of server names to clients with their cached tools.
-pub struct McpManager {
+/// RAII guard that maintains MCP connections during an LLM session.
+pub struct McpConnection {
 	clients: HashMap<String, McpClientWithTools>,
 }
 
-impl McpManager {
-	/// Initialize MCP clients from configuration and connect to all configured servers
-	/// Returns an McpManager containing all connected clients with their cached tools
-	/// If any server fails to connect, an error is returned
-	pub async fn initialize_from_config(config: &McpConfig) -> Result<Self> {
+/// Factory for creating MCP connections from configuration.
+/// Holds the configuration but doesn't maintain persistent connections.
+pub struct McpManager {
+	config: McpConfig,
+}
+
+impl McpConnection {
+	/// Create a new MCP connection session by connecting to all configured servers
+	/// This establishes fresh connections for this session
+	pub async fn new(config: &McpConfig) -> Result<Self> {
 		let mut clients = HashMap::new();
 
 		// init client info which we need to pass to all servers to introduce ourselves
@@ -305,13 +309,11 @@ impl McpManager {
 			}
 		}
 
-		let manager = McpManager {
+		let connection = McpConnection {
 			clients,
 		};
-
-		manager.dump_available_clients();
-
-		Ok(manager)
+		connection.dump_available_clients();
+		Ok(connection)
 	}
 
 	/// Dump information about all connected MCP clients to the log
@@ -457,5 +459,21 @@ impl McpManager {
 				service_error_to_description(&err)
 			))),
 		}
+	}
+}
+
+impl McpManager {
+	/// Create a new McpManager from configuration
+	/// This only stores the configuration - connections are created on demand
+	pub fn new(config: McpConfig) -> Self {
+		Self {
+			config,
+		}
+	}
+
+	/// Create a new MCP connection session
+	/// This establishes connections to all configured servers
+	pub async fn create_connection(&self) -> Result<McpConnection> {
+		McpConnection::new(&self.config).await
 	}
 }

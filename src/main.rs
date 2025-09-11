@@ -255,7 +255,7 @@ async fn main() -> Result<()> {
 		.wrap_err("failed to load environment variables")?;
 
 	let mcp_config = McpConfig::load_default().await?.unwrap();
-	let mcp_manager = McpManager::initialize_from_config(&mcp_config).await?;
+	let mcp_manager = McpManager::new(mcp_config);
 
 	let tera = {
 		let template_dir = format!("{}/{}", env_config.template_dir, "*.txt");
@@ -266,14 +266,20 @@ async fn main() -> Result<()> {
 
 	let llm_client = {
 		let backend = env_config.get_llm_backend()?;
-		
+
 		let mut builder = LLMBuilder::new()
 			.backend(backend)
 			.api_key(&env_config.api_key)
 			.model(&env_config.model)
 			.max_tokens(2000);
 
-		for fun_builder in mcp_manager.get_llm_functions() {
+		// llm crate forces us to add functions at buid time, so we create a short lived connection to get the functions
+		let mcp_connection = mcp_manager
+			.create_connection()
+			.await
+			.wrap_err("failed to create MCP connection for initial tool fetch")?;
+
+		for fun_builder in mcp_connection.get_llm_functions() {
 			builder = builder.function(fun_builder);
 		}
 

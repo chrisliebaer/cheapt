@@ -38,7 +38,6 @@ use crate::{
 	AppState,
 	context_extraction::ContextMessageVariant,
 	invocation_builder::InvocationBuilder,
-	mcp::McpManager,
 	user_from_db_or_create,
 };
 
@@ -251,6 +250,8 @@ async fn generate_llm_response<'a>(
 	let llm_client = &app.llm_client;
 	let mcp_manager = &app.mcp_manager;
 
+	// create a new MCP connection session for this LLM response generation
+	let mcp_connection = mcp_manager.create_connection().await?;
 	let tera_context = create_tera_context(ctx, message).await?;
 
 	// remove empty lines, and truncate leading and trailing whitespace
@@ -340,7 +341,7 @@ async fn generate_llm_response<'a>(
 				debug!("Processing tool call: {}", call.function.name);
 				trace!("  - Arguments: {}", call.function.arguments);
 
-				let result = process_tool_call(&call, mcp_manager).await?;
+				let result = process_tool_call(&call, &mcp_connection).await?;
 				let pretty_json = serde_json::to_string_pretty(&result)
 					.into_diagnostic()
 					.wrap_err("failed to pretty-print tool result")?;
@@ -497,8 +498,8 @@ fn dump_llm_messages(messages: &[ChatMessage]) {
 	}
 }
 
-async fn process_tool_call(tool_call: &ToolCall, mcp_manager: &McpManager) -> Result<Value> {
-	match mcp_manager.handle_llm_tool_call(tool_call).await {
+async fn process_tool_call(tool_call: &ToolCall, mcp_connection: &crate::mcp::McpConnection) -> Result<Value> {
+	match mcp_connection.handle_llm_tool_call(tool_call).await {
 		None => Ok(json!({
 			"id": "tool_not_found",
 			"error": format!("No tool found with name '{}'", tool_call.function.name)
