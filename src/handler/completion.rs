@@ -23,6 +23,7 @@ use poise::{
 	FrameworkContext,
 	serenity_prelude::{
 		ChannelId,
+		CreateAllowedMentions,
 		CreateMessage,
 		Message,
 	},
@@ -393,7 +394,13 @@ async fn generate_llm_response<'a>(
 
 			message
 				.channel_id
-				.send_message(ctx, CreateMessage::new().reference_message(message).content(content))
+				.send_message(
+					ctx,
+					CreateMessage::new()
+						.reference_message(message)
+						.allowed_mentions(CreateAllowedMentions::new().empty_roles().empty_users().replied_user(true))
+						.content(content),
+				)
 				.await
 				.into_diagnostic()
 				.wrap_err("failed to send reply message")?;
